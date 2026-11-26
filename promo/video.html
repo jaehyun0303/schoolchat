@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>디톡 홍보영상</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:#0E1020}
+#stage{position:relative;width:1920px;height:1080px;overflow:hidden;font-family:'Noto Sans KR',sans-serif;-webkit-font-smoothing:antialiased}
+.scene{position:absolute;inset:0;overflow:hidden;display:none}
+.bg-dark{background:#0E1020}
+.bg-light{background:#EEF0F7}
+.glow{position:absolute;border-radius:50%;filter:blur(10px);pointer-events:none}
+.dots{position:absolute;inset:0;background-image:radial-gradient(rgba(20,22,40,.07) 1.2px,transparent 1.2px);background-size:28px 28px}
+.abs{position:absolute}
+
+/* 기기 프레임 */
+.dev{position:absolute;transform-origin:50% 50%;background:#0B0D14;box-shadow:0 70px 120px -40px rgba(18,20,45,.55),0 30px 60px -30px rgba(18,20,45,.35),inset 0 0 0 2px #2A2F42}
+.dev .scr{position:relative;overflow:hidden;background:#F5F6FA}
+.dev .cam{position:absolute;left:0;top:0;transform-origin:0 0}
+.dev .cam img{position:absolute;left:0;top:0;display:none}
+.dev .cam img.in{display:block}
+.dev .cam .slide{position:absolute;left:0;top:0}
+.ring{position:absolute;box-sizing:border-box;border-radius:14px;pointer-events:none}
+.tap{position:absolute;border-radius:50%;pointer-events:none;border:3px solid #4F46E5;box-sizing:border-box}
+
+/* 캡션 */
+.cap{position:absolute}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;height:44px;padding:0 18px;border-radius:22px;background:#E3E6FF;color:#3730A3;font-size:20px;font-weight:700;letter-spacing:-.2px}
+.eyebrow i{width:10px;height:10px;border-radius:50%;background:#4F46E5}
+.hl{margin-top:26px}
+.hl .ln{overflow:hidden;padding-bottom:6px}
+.hl .ln span{display:block;font-size:84px;line-height:1.12;font-weight:900;letter-spacing:-3px;color:#14161F;white-space:nowrap}
+.hl .ln.acc span{color:#4F46E5}
+.sub{margin-top:22px;font-size:28px;line-height:1.55;font-weight:500;color:#4A5062;max-width:560px;letter-spacing:-.4px}
+
+/* 팝아웃 (화면 일부를 떼어내 띄우는 효과) */
+.pop{position:absolute;background-repeat:no-repeat;box-shadow:0 30px 60px -18px rgba(18,20,45,.45),0 0 0 1px rgba(20,22,40,.06)}
+
+/* 알림 카드 (모션그래픽용) */
+.noti{position:absolute;width:560px;border-radius:28px;background:rgba(255,255,255,.96);box-shadow:0 30px 70px -20px rgba(18,20,45,.45);padding:22px 26px;box-sizing:border-box;display:flex;gap:18px;align-items:flex-start}
+.noti .ic{width:56px;height:56px;border-radius:16px;background:#4F46E5;display:flex;align-items:center;justify-content:center;flex:none}
+.noti .top{display:flex;justify-content:space-between;font-size:18px;color:#5B6172;font-weight:500}
+.noti b{display:block;font-size:24px;color:#14161F;margin-top:4px}
+.noti p{margin:4px 0 0;font-size:22px;color:#3A3F52;line-height:1.4}
+
+.pill{display:inline-flex;align-items:center;height:56px;padding:0 26px;border-radius:28px;background:rgba(255,255,255,.08);border:1.5px solid rgba(199,204,255,.25);color:#E4E7FF;font-size:24px;font-weight:500}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+'use strict';
+const SHOT = 'shots/';
+const META = __META__;
+const FPS = 30;
+const DURATION = 52;
+const stage = document.getElementById('stage');
+
+// ---------- 수학 / 이징 ----------
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, p) => a + (b - a) * p;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const eOutCubic = (p) => 1 - Math.pow(1 - p, 3);
+const eInOutCubic = (p) => (p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const eOutBack = (p) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); };
+const eOutQuint = (p) => 1 - Math.pow(1 - p, 5);
+const eInOutQuint = (p) => (p < .5 ? 16 * p ** 5 : 1 - Math.pow(-2 * p + 2, 5) / 2);
+// 키프레임: [[t, v0, v1, ...], ...] 구간마다 easeInOut
+function kf(t, frames, ease = eInOutCubic) {
+  if (t <= frames[0][0]) return frames[0].slice(1);
+  for (let i = 0; i < frames.length - 1; i++) {
+    const a = frames[i], b = frames[i + 1];
+    if (t <= b[0]) { const p = ease(prog(t, a[0], b[0])); return a.slice(1).map((v, j) => lerp(v, b[j + 1], p)); }
+  }
+  return frames[frames.length - 1].slice(1);
+}
+function rng(seed) { return () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }; }
+function h(tag, cls, style, html) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (style) el.style.cssText = style;
+  if (html != null) el.innerHTML = html;
+  return el;
+}
+const BUBBLE = '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>';
+
+// ---------- 공통 배경 ----------
+function lightBg(scene, seed) {
+  scene.classList.add('bg-light');
+  scene.append(h('div', 'dots'));
+  const g1 = h('div', 'glow', 'width:900px;height:900px;background:radial-gradient(circle,rgba(99,102,241,.30),rgba(99,102,241,0) 65%)');
+  const g2 = h('div', 'glow', 'width:800px;height:800px;background:radial-gradient(circle,rgba(18,183,106,.18),rgba(18,183,106,0) 65%)');
+  scene.append(g1, g2);
+  return (t) => {
+    g1.style.transform = `translate(${1250 + Math.sin(t * .35 + seed) * 120}px,${-300 + Math.cos(t * .3 + seed) * 80}px)`;
+    g2.style.transform = `translate(${-260 + Math.cos(t * .28 + seed) * 120}px,${520 + Math.sin(t * .33) * 90}px)`;
+  };
+}
+function darkBg(scene, seed) {
+  scene.classList.add('bg-dark');
+  const g1 = h('div', 'glow', 'width:1300px;height:1300px;background:radial-gradient(circle,rgba(79,70,229,.40),rgba(79,70,229,0) 62%)');
+  const g2 = h('div', 'glow', 'width:900px;height:900px;background:radial-gradient(circle,rgba(18,183,106,.14),rgba(18,183,106,0) 65%)');
+  scene.append(g1, g2);
+  return (t) => {
+    g1.style.transform = `translate(${310 + Math.sin(t * .3 + seed) * 140}px,${-110 + Math.cos(t * .25 + seed) * 90}px)`;
+    g2.style.transform = `translate(${1150 + Math.cos(t * .3) * 140}px,${420 + Math.sin(t * .27 + seed) * 100}px)`;
+  };
+}
+
+// ---------- 기기 ----------
+// kind: 'tab' (1280x800) | 'phone' (393x852). 화면 안에 실제 스크린샷을 넣고 카메라(줌)를 움직여요.
+function makeDevice(kind, names) {
+  const W = kind === 'tab' ? 1280 : 393, H = kind === 'tab' ? 800 : 852;
+  const pad = kind === 'tab' ? 22 : 14, rOut = kind === 'tab' ? 46 : 62, rIn = kind === 'tab' ? 22 : 50;
+  const el = h('div', 'dev', `padding:${pad}px;border-radius:${rOut}px;width:${W}px;height:${H}px`);
+  const scr = h('div', 'scr', `width:${W}px;height:${H}px;border-radius:${rIn}px`);
+  const cam = h('div', 'cam', `width:${W}px;height:${H}px`);
+  const imgs = {};
+  for (const n of names) {
+    const im = h('img');
+    im.src = SHOT + n + '.png';
+    im.style.width = W + 'px'; im.style.height = H + 'px';
+    cam.append(im);
+    imgs[n] = im;
+  }
+  const overlay = h('div', '', `position:absolute;left:0;top:0;width:${W}px;height:${H}px`);
+  cam.append(overlay);
+  scr.append(cam);
+  el.append(scr);
+  const dev = {
+    el, cam, overlay, W, H, pad, cs: 1, ccx: W / 2, ccy: H / 2, cx: 0, cy: 0, k: 1,
+    // 기기 위치/크기/회전
+    place(cx, cy, k, rx = 0, ry = 0, rz = 0) {
+      dev.cx = cx; dev.cy = cy; dev.k = k;
+      el.style.left = (cx - (W + 2 * pad) / 2) + 'px';
+      el.style.top = (cy - (H + 2 * pad) / 2) + 'px';
+      el.style.transform = `perspective(2600px) rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg) scale(${k})`;
+    },
+    // 화면 카메라: 배율 s로 (x, y)를 화면 가운데에
+    camera(s, x, y) {
+      const hw = W / (2 * s), hh = H / (2 * s);
+      x = s <= 1 ? W / 2 : clamp(x, hw, W - hw);
+      y = s <= 1 ? H / 2 : clamp(y, hh, H - hh);
+      dev.cs = s; dev.ccx = x; dev.ccy = y;
+      cam.style.transform = `translate(${W / 2}px,${H / 2}px) scale(${s}) translate(${-x}px,${-y}px)`;
+    },
+    // 플립북: [[시각, 이름], ...] 중 지금 보여줄 화면
+    show(name) { for (const [n, im] of Object.entries(imgs)) im.classList.toggle('in', n === name); },
+    showAt(t, list) { let cur = list[0][1]; for (const [ft, n] of list) if (t >= ft) cur = n; dev.show(cur); return cur; },
+    // 화면 좌표 → 무대 좌표 (회전 없는 경우)
+    toStage(x, y) {
+      const lx = pad + W / 2 + dev.cs * (x - dev.ccx), ly = pad + H / 2 + dev.cs * (y - dev.ccy);
+      const fw = W + 2 * pad, fh = H + 2 * pad;
+      return [dev.cx + dev.k * (lx - fw / 2), dev.cy + dev.k * (ly - fh / 2)];
+    }
+  };
+  dev.camera(1, W / 2, H / 2);
+  return dev;
+}
+function ring(dev, box, color, radius = 14, padd = 6) {
+  const r = h('div', 'ring', `left:${box.x - padd}px;top:${box.y - padd}px;width:${box.w + padd * 2}px;height:${box.h + padd * 2}px;border-radius:${radius}px;border:3px solid ${color};box-shadow:0 0 0 0 ${color}`);
+  dev.overlay.append(r);
+  return (t, a, b, pulse = true) => {
+    const p = eOutCubic(prog(t, a, a + .35)) * (1 - prog(t, b - .3, b));
+    r.style.opacity = p;
+    const ph = pulse ? (t - a) * 2.2 % 1 : 0;
+    r.style.transform = `scale(${lerp(1.08, 1, eOutBack(prog(t, a, a + .45)))})`;
+    r.style.boxShadow = pulse ? `0 0 0 ${ph * 14}px ${color}${Math.round((1 - ph) * 60).toString(16).padStart(2, '0')}` : 'none';
+  };
+}
+function tap(dev, x, y) {
+  const r = h('div', 'tap');
+  dev.overlay.append(r);
+  return (t, a) => {
+    const p = prog(t, a, a + .55);
+    const on = t >= a && t <= a + .55;
+    r.style.display = on ? 'block' : 'none';
+    const d = lerp(18, 80, eOutCubic(p));
+    Object.assign(r.style, { left: x - d / 2 + 'px', top: y - d / 2 + 'px', width: d + 'px', height: d + 'px', opacity: 1 - p, background: `rgba(79,70,229,${.25 * (1 - p)})` });
+  };
+}
+// 화면 일부(실제 스크린샷)를 떼어내 앞으로 띄우는 효과
+function popOut(scene, dev, shot, box, radius, dx, dy, grow) {
+  const el = h('div', 'pop');
+  el.style.backgroundImage = `url(${SHOT}${shot}.png)`;
+  scene.append(el);
+  return (t, a, b) => {
+    if (t < a || t > b) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    const pin = eOutBack(prog(t, a, a + .6)), pout = eInOutCubic(prog(t, b - .45, b));
+    const p = pin * (1 - pout);
+    const [sx, sy] = dev.toStage(box.x, box.y);
+    const base = dev.k * dev.cs;
+    const z = base * lerp(1, grow, p);
+    const w = box.w * z, hgt = box.h * z;
+    const ox = sx + dx * p - (w - box.w * base) / 2, oy = sy + dy * p - (hgt - box.h * base) / 2;
+    el.style.left = ox + 'px'; el.style.top = oy + 'px';
+    el.style.width = w + 'px'; el.style.height = hgt + 'px';
+    el.style.borderRadius = radius * z + 'px';
+    el.style.backgroundSize = `${dev.W * z}px ${dev.H * z}px`;
+    el.style.backgroundPosition = `${-box.x * z}px ${-box.y * z}px`;
+    el.style.opacity = clamp(prog(t, a, a + .12) * (1 - prog(t, b - .15, b)));
+  };
+}
+
+// ---------- 캡션 ----------
+function caption(scene, x, y, eyebrow, lines, sub, opts = {}) {
+  const el = h('div', 'cap', `left:${x}px;top:${y}px;${opts.center ? 'transform:translateX(-50%);text-align:center' : ''}`);
+  const eb = eyebrow ? h('div', 'eyebrow', '', `<i></i>${eyebrow}`) : null;
+  const hl = h('div', 'hl');
+  const spans = lines.map((l, i) => {
+    const ln = h('div', 'ln' + (opts.accentLast && i === lines.length - 1 ? ' acc' : ''));
+    const s = h('span', '', opts.size ? `font-size:${opts.size}px` : '', l);
+    ln.append(s); hl.append(ln);
+    return s;
+  });
+  const sb = sub ? h('div', 'sub', opts.center ? 'margin-left:auto;margin-right:auto;max-width:1000px' : '', sub) : null;
+  if (eb) el.append(eb);
+  el.append(hl);
+  if (sb) el.append(sb);
+  scene.append(el);
+  return (t, a, b) => {
+    el.style.display = t < a - .01 || t > b ? 'none' : 'block';
+    const out = eInOutCubic(prog(t, b - .4, b));
+    el.style.opacity = 1 - out;
+    el.style.marginTop = (-30 * out) + 'px';
+    if (eb) { const p = eOutCubic(prog(t, a, a + .5)); eb.style.opacity = p; eb.style.transform = `translateY(${(1 - p) * 16}px)`; }
+    spans.forEach((s, i) => { const p = eOutQuint(prog(t, a + .12 + i * .1, a + .82 + i * .1)); s.style.transform = `translateY(${(1 - p) * 110}%)`; });
+    if (sb) { const p = eOutCubic(prog(t, a + .45, a + 1.05)); sb.style.opacity = p; sb.style.transform = `translateY(${(1 - p) * 18}px)`; }
+  };
+}
+
+// ---------- 장면 정의 ----------
+const scenes = [];
+function scene(a, b, build) {
+  const el = h('div', 'scene');
+  stage.append(el);
+  const update = build(el);
+  scenes.push({ a, b, el, update });
+}
+const FADE = .5;
+
+// 1) 인트로: 로고
+scene(0, 4.2, (el) => {
+  const bg = darkBg(el, 1);
+  const wrap = h('div', 'abs', 'left:0;top:0;width:1920px;height:1080px');
+  const mark = h('div', 'abs', 'left:0;top:0;width:180px;height:180px;border-radius:52px;background:#4F46E5;display:flex;align-items:center;justify-content:center;box-shadow:0 30px 80px -10px rgba(79,70,229,.7)',
+    `<svg width="104" height="104" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path pathLength="1" stroke-dasharray="1" d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>`);
+  const path = mark.querySelector('path');
+  const wordBox = h('div', 'abs', 'left:0;top:0;overflow:hidden;height:190px');
+  const word = h('div', '', 'font-size:150px;font-weight:900;letter-spacing:-5px;color:#fff;line-height:190px', '디톡');
+  wordBox.append(word);
+  const tag = h('div', 'abs', 'left:0;top:0;width:1920px;text-align:center;font-size:38px;font-weight:500;color:#C7CCFF;letter-spacing:-.5px', '디벗으로 이어지는 우리 반 채팅');
+  wrap.append(mark, wordBox, tag);
+  el.append(wrap);
+  return (t) => {
+    bg(t);
+    const pm = eOutBack(prog(t, .2, .9));
+    const slide = eInOutQuint(prog(t, 1.15, 1.85));
+    const groupW = 180 + 44 + 300;
+    const mx = lerp(960 - 90, 960 - groupW / 2, slide);
+    mark.style.left = mx + 'px'; mark.style.top = (470 - 90 - 30) + 'px';
+    mark.style.transform = `scale(${pm}) rotate(${(1 - pm) * -20}deg)`;
+    path.style.strokeDashoffset = 1 - eInOutCubic(prog(t, .55, 1.4));
+    wordBox.style.left = (mx + 180 + 44) + 'px'; wordBox.style.top = (470 - 95 - 30) + 'px';
+    const pw = eOutQuint(prog(t, 1.45, 2.2));
+    wordBox.style.width = (pw * 320) + 'px';
+    word.style.transform = `translateX(${(1 - pw) * -60}px)`;
+    const pt = eOutCubic(prog(t, 2.0, 2.7));
+    tag.style.top = (640 + (1 - pt) * 24) + 'px'; tag.style.opacity = pt;
+    const ex = eInOutCubic(prog(t, 3.5, 4.2));
+    wrap.style.transform = `scale(${1 + ex * .12})`; wrap.style.filter = `blur(${ex * 8}px)`;
+  };
+});
+
+// 2) 훅: 키네틱 타이포
+scene(3.7, 8.7, (el) => {
+  const bg = darkBg(el, 2);
+  const R = rng(7);
+  const bubbles = [];
+  const cols = ['rgba(79,70,229,.55)', 'rgba(139,147,248,.35)', 'rgba(18,183,106,.35)', 'rgba(255,255,255,.07)', 'rgba(255,255,255,.12)'];
+  for (let i = 0; i < 26; i++) {
+    const w = 90 + R() * 260, hh = 54 + R() * 30, mine = R() > .5;
+    const b = h('div', 'abs', `width:${w}px;height:${hh}px;border-radius:${mine ? '28px 28px 6px 28px' : '28px 28px 28px 6px'};background:${cols[i % cols.length]}`);
+    el.append(b);
+    bubbles.push({ b, x: R() * 1920, y: R() * 1300, sp: 40 + R() * 120, z: .6 + R() * .7 });
+  }
+  const eyebrow = h('div', 'abs', 'left:0;top:330px;width:1920px;text-align:center;font-size:34px;font-weight:500;color:#A5B4FC;letter-spacing:-.4px', '학교에서 오가는 모든 대화');
+  const box = h('div', 'abs', 'left:0;top:410px;width:1920px;height:150px;overflow:hidden');
+  const words = ['수행평가 팀 연락도', '동아리 공지도', '점심 약속도'];
+  const wEls = words.map((w) => { const d = h('div', 'abs', 'left:0;top:0;width:1920px;text-align:center;font-size:118px;line-height:150px;font-weight:900;letter-spacing:-4px;color:#fff', w); box.append(d); return d; });
+  const fin = h('div', 'abs', 'left:0;top:420px;width:1920px;text-align:center;font-size:150px;line-height:180px;font-weight:900;letter-spacing:-6px;color:#fff', '<span style="color:#A5B4FC">디톡</span> 하나로.');
+  el.append(eyebrow, box, fin);
+  return (t) => {
+    bg(t);
+    for (const o of bubbles) {
+      const y = ((o.y - t * o.sp) % 1400 + 1400) % 1400 - 200;
+      o.b.style.transform = `translate(${o.x}px,${y}px) scale(${o.z})`;
+      o.b.style.opacity = .9 * (1 - prog(t, 7.2, 7.8) * .6);
+    }
+    const pe = eOutCubic(prog(t, 4.0, 4.6)) * (1 - prog(t, 7.0, 7.4));
+    eyebrow.style.opacity = pe; eyebrow.style.transform = `translateY(${(1 - pe) * 16}px)`;
+    const starts = [4.15, 5.15, 6.1];
+    wEls.forEach((w, i) => {
+      const a = starts[i], b = i < 2 ? starts[i + 1] : 7.1;
+      const pin = eOutQuint(prog(t, a, a + .55)), pout = eInOutCubic(prog(t, b - .05, b + .4));
+      w.style.transform = `translateY(${(1 - pin) * 150 - pout * 150}px)`;
+      w.style.display = t < a || t > b + .4 ? 'none' : 'block';
+    });
+    const pf = eOutBack(prog(t, 7.2, 7.85));
+    fin.style.opacity = prog(t, 7.2, 7.45);
+    fin.style.transform = `scale(${lerp(.82, 1, pf)})`;
+  };
+});
+
+// 3) 로그인 · 회원가입 (실제 화면)
+scene(8.2, 14.2, (el) => {
+  const bg = lightBg(el, 3);
+  const cap = caption(el, 960, 96, '회원가입 · 로그인', ['가입은 1분이면 끝'], '닉네임, 아이디, 비밀번호만 정하면 바로 시작해요', { center: true, size: 76 });
+  const login = makeDevice('tab', ['login']); login.show('login');
+  const signup = makeDevice('tab', ['signup']); signup.show('signup');
+  el.append(login.el, signup.el);
+  const rHint = ring(signup, META.signup.hint, '#12B76A', 10, 6);
+  return (t) => {
+    bg(t);
+    cap(t, 8.55, 14.2);
+    const p1 = eOutQuint(prog(t, 8.6, 9.6)), p2 = eOutQuint(prog(t, 8.9, 9.9));
+    const drift = Math.sin(t * .6) * 1.2;
+    login.place(600, lerp(1000, 690, p1), .5, lerp(24, 6, p1), 16 + drift, 0);
+    login.el.style.opacity = prog(t, 8.6, 8.9);
+    const zoom = eInOutCubic(prog(t, 11.4, 12.4));
+    signup.place(lerp(1300, 1250, zoom), lerp(1040, 690, p2) - zoom * 40, lerp(.5, .66, zoom), lerp(24, 4, p2) * (1 - zoom), lerp(-16 - drift, 0, zoom), 0);
+    signup.el.style.opacity = prog(t, 8.9, 9.2);
+    signup.el.style.zIndex = 2;
+    const [s, cx, cy] = kf(t, [[11.4, 1, 640, 400], [12.4, 1.55, 920, 420], [14.2, 1.6, 920, 420]]);
+    signup.camera(s, cx, cy);
+    rHint(t, 12.5, 14.2);
+  };
+});
+
+// 4~7) 메인 앱 화면 (실제 화면 연속)
+scene(13.7, 42.4, (el) => {
+  const bg = lightBg(el, 4);
+  const typeNames = Array.from({ length: META.type.count }, (_, i) => 'type_' + String(i).padStart(2, '0'));
+  const names = ['room_0', ...typeNames, 'room_1', 'room_2', 'room_3', 'presence_1', 'modal_0', 'modal_1', 'modal_2', 'modal_3', 'modal_4', 'modal_5', 'modal_done',
+    'dm_0', 'dm_menu', 'dm_edit', 'dm_edited', 'dm_typo', 'dm_menu2', 'dm_deleted'];
+  const dev = makeDevice('tab', names);
+  el.append(dev.el);
+  const flip = [[0, 'room_0'], ...typeNames.map((n, i) => [15.0 + i * .2, n]), [17.6, 'room_1'], [19.3, 'room_2'], [20.8, 'room_3'], [26.0, 'presence_1'],
+    [29.4, 'modal_0'], [30.0, 'modal_1'], [30.5, 'modal_2'], [31.1, 'modal_3'], [31.6, 'modal_4'], [32.1, 'modal_5'], [33.0, 'modal_done'],
+    [34.6, 'dm_0'], [37.8, 'dm_menu'], [38.5, 'dm_edit'], [39.2, 'dm_edited'], [39.8, 'dm_typo'], [40.4, 'dm_menu2'], [41.0, 'dm_deleted']];
+  const M = META;
+  const c = (b) => [b.x + b.w / 2, b.y + b.h / 2];
+  const [compX, compY] = c(M.room_0.composer);
+  const [pplX] = c(M.room_3.people);
+  const [modX, modY] = c(M.modal_0.modal);
+  const [edX, edY] = c(M.dm_edited.bubble);
+  const camK = [
+    [13.7, 1, 640, 400], [14.8, 1, 640, 400], [15.5, 1.85, compX, compY], [17.4, 1.85, compX, compY],
+    [18.1, 1.28, 700, 560], [22.3, 1.28, 700, 560], [23.2, 1.95, pplX, 250], [28.3, 1.95, pplX, 250],
+    [28.9, 1, 640, 400], [29.5, 1, 640, 400], [30.1, 1.45, modX, modY], [32.6, 1.45, modX, modY], [33.2, 1, 640, 400],
+    [34.5, 1, 640, 400], [35.1, 1.32, 700, 420], [37.3, 1.32, 700, 420], [37.9, 1.7, edX - 40, edY + 40], [42.4, 1.7, edX - 40, edY + 40]
+  ];
+  // 강조 링
+  const onBox = { x: M.room_3.online.x - 8, y: M.room_3.online.y - 6, w: M.room_3.online.w + 16, h: M.room_3.offline.y - M.room_3.online.y - 6 };
+  const offBox = { x: M.room_3.offline.x - 8, y: M.room_3.offline.y - 6, w: M.room_3.offline.w + 16, h: 180 };
+  const rOn = ring(dev, onBox, '#12B76A', 14, 0);
+  const rOff = ring(dev, offBox, '#7C8396', 14, 0);
+  const rDoyoon = ring(dev, M.presence_1.doyoon, '#12B76A', 12, 2);
+  const rChips = ring(dev, M.modal_5.chips, '#4F46E5', 16, 8);
+  const rCode = ring(dev, M.modal_done.codebox, '#4F46E5', 16, 4);
+  const rHeader = ring(dev, { x: 470, y: 46, w: 150, h: 22 }, '#12B76A', 10, 4);
+  const tNew = tap(dev, ...c(M.home.newBtn));
+  const tSend = tap(dev, 948, 750);
+  const tOk = tap(dev, ...c(M.modal_5.ok));
+  // 팝아웃
+  const p1 = popOut(el, dev, 'room_1', M.room_1.last, 18, -40, -70, 1.18);
+  const p2 = popOut(el, dev, 'room_2', M.room_2.last, 18, 40, -60, 1.14);
+  const p3 = popOut(el, dev, 'room_3', M.room_3.last, 18, 40, -60, 1.14);
+  const p4 = popOut(el, dev, 'dm_0', M.dm_0.file, 18, -150, -110, 1.3);
+  const p5 = popOut(el, dev, 'dm_0', M.dm_0.photo, 18, 90, 30, 1.1);
+  // 캡션
+  const X = 110, Y = 300;
+  const c1 = caption(el, X, Y, '단체 채팅', ['단체 채팅도', '실시간으로'], '보내는 순간 반 친구들 화면에 바로 떠요', { accentLast: true });
+  const c2 = caption(el, X, Y, '접속 상태', ['지금 누가', '접속 중인지'], '초록 점이면 온라인, 아니면 마지막 접속 시간까지 보여요', { accentLast: true });
+  const c3 = caption(el, X, Y, '채팅방 만들기', ['채팅방은', '몇 초 만에'], '반, 동아리, 모둠별로 친구를 초대하고 공개 방은 초대 코드로 들어와요', { accentLast: true });
+  const c4 = caption(el, X, Y, '사진 · 파일', ['사진도 파일도', '그대로'], '실험 사진부터 한글 파일까지 바로 주고받아요', { accentLast: true });
+  const c5 = caption(el, X, Y, '수정 · 전송 취소', ['수정도,', '전송 취소도'], '잘못 보낸 메시지도 걱정 없어요', { accentLast: true });
+  return (t) => {
+    bg(t);
+    const pin = eOutQuint(prog(t, 13.7, 14.9));
+    dev.place(1258, lerp(620, 540, pin), lerp(.72, .8, pin), lerp(10, 0, pin), lerp(-14, 0, pin), 0);
+    dev.showAt(t, flip);
+    const [s, cx, cy] = kf(t, camK);
+    dev.camera(s, cx, cy);
+    tSend(t, 17.35);
+    rOn(t, 23.6, 25.9); rOff(t, 24.3, 25.9, false);
+    rDoyoon(t, 26.15, 28.4); rHeader(t, 26.3, 28.4, false);
+    tNew(t, 28.95);
+    rChips(t, 30.7, 32.7);
+    tOk(t, 32.55);
+    rCode(t, 33.3, 34.4);
+    p1(t, 17.8, 19.2); p2(t, 19.45, 20.75); p3(t, 20.95, 22.4);
+    p4(t, 35.3, 37.5); p5(t, 35.75, 37.5);
+    c1(t, 14.1, 22.8); c2(t, 23.0, 28.7); c3(t, 29.0, 34.3); c4(t, 34.5, 37.7); c5(t, 37.85, 42.4);
+  };
+});
+
+// 8) 모바일 + 알림
+scene(41.9, 48.2, (el) => {
+  const bg = lightBg(el, 5);
+  const cap = caption(el, 110, 330, '모바일 · 알림', ['앱처럼 설치하고', '알림까지'], '홈 화면에 추가하면 새 메시지를 알림으로 받아요', { accentLast: true });
+  const ph = makeDevice('phone', ['mobile_list', 'mobile_room', 'mobile_dm']);
+  el.append(ph.el);
+  // 화면 전환은 앱처럼 옆으로 밀려 들어오게
+  const imgs = ph.cam.querySelectorAll('img');
+  const mkNoti = (who, text, ic) => {
+    const n = h('div', 'noti', '', `<div class="ic"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${BUBBLE}</svg></div>
+      <div style="flex:1;min-width:0"><div class="top"><span>디톡</span><span>지금</span></div><b>${who}</b><p>${text}</p></div>`);
+    el.append(n);
+    return n;
+  };
+  const n1 = mkNoti('서연', '수행평가 자료 보내줄게');
+  const n2 = mkNoti('1학년 3반', '선우: 내일 체육복도 챙겨야 해 ㅋㅋ');
+  return (t) => {
+    bg(t);
+    cap(t, 42.3, 48.2);
+    const pin = eOutQuint(prog(t, 41.9, 43.0));
+    ph.place(1320, lerp(1300, 560, pin), 1.0, 0, lerp(-18, -6, pin) + Math.sin(t * .7) * 1.5, lerp(6, 0, pin));
+    const order = [[41.9, 0], [43.9, 1], [45.7, 2]];
+    let cur = 0, since = 0;
+    for (const [ft, i] of order) if (t >= ft) { cur = i; since = ft; }
+    imgs.forEach((im, i) => {
+      const p = eInOutCubic(prog(t, since, since + .45));
+      if (i === cur) { im.classList.add('in'); im.style.transform = `translateX(${(1 - p) * 393}px)`; im.style.zIndex = 2; im.style.boxShadow = '-20px 0 40px rgba(0,0,0,.12)'; }
+      else if (i === cur - 1 && p < 1) { im.classList.add('in'); im.style.transform = `translateX(${-p * 120}px)`; im.style.zIndex = 1; }
+      else im.classList.remove('in');
+    });
+    const a1 = eOutBack(prog(t, 44.4, 45.0)), a2 = eOutBack(prog(t, 45.2, 45.8));
+    const push = eInOutCubic(prog(t, 45.2, 45.6));
+    n1.style.left = (1320 - 280) + 'px'; n2.style.left = (1320 - 280) + 'px';
+    n1.style.top = (lerp(-200, 56, a1) + push * 168) + 'px';
+    n1.style.opacity = prog(t, 44.4, 44.6); n1.style.transform = `scale(${1 - push * .04})`;
+    n2.style.top = lerp(-200, 56, a2) + 'px';
+    n2.style.opacity = prog(t, 45.2, 45.4);
+    n2.style.zIndex = 3;
+  };
+});
+
+// 9) 엔딩
+scene(47.7, DURATION, (el) => {
+  const bg = darkBg(el, 9);
+  const mark = h('div', 'abs', 'left:0;top:0;width:150px;height:150px;border-radius:44px;background:#4F46E5;display:flex;align-items:center;justify-content:center;box-shadow:0 30px 80px -10px rgba(79,70,229,.7)',
+    `<svg width="86" height="86" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${BUBBLE}</svg>`);
+  const word = h('div', 'abs', 'left:0;top:0;font-size:124px;font-weight:900;letter-spacing:-4px;color:#fff;line-height:150px', '디톡');
+  const tag = h('div', 'abs', 'left:0;width:1920px;text-align:center;font-size:44px;font-weight:700;color:#fff;letter-spacing:-1px', '우리 반 대화, 이제 디톡에서');
+  const sub = h('div', 'abs', 'left:0;width:1920px;text-align:center;font-size:28px;font-weight:500;color:#A5B4FC', '디벗 브라우저에서 바로 시작하세요');
+  const row = h('div', 'abs', 'left:0;width:1920px;display:flex;justify-content:center;gap:14px;flex-wrap:wrap');
+  const pills = ['회원가입', '채팅방', '1:1 채팅', '실시간 메시지', '온라인 표시', '사진 · 파일', '푸시 알림'].map((p) => { const d = h('div', 'pill', '', p); row.append(d); return d; });
+  el.append(mark, word, tag, sub, row);
+  return (t) => {
+    bg(t);
+    const pm = eOutBack(prog(t, 48.0, 48.6));
+    const groupW = 150 + 36 + 250;
+    const x0 = 960 - groupW / 2;
+    mark.style.left = x0 + 'px'; mark.style.top = '250px'; mark.style.transform = `scale(${pm})`;
+    const pw = eOutQuint(prog(t, 48.25, 48.95));
+    word.style.left = (x0 + 186) + 'px'; word.style.top = '250px'; word.style.opacity = pw; word.style.transform = `translateX(${(1 - pw) * -40}px)`;
+    const pt = eOutCubic(prog(t, 48.7, 49.3));
+    tag.style.top = (470 + (1 - pt) * 24) + 'px'; tag.style.opacity = pt;
+    const ps = eOutCubic(prog(t, 49.0, 49.6));
+    sub.style.top = (545 + (1 - ps) * 20) + 'px'; sub.style.opacity = ps;
+    row.style.top = '660px';
+    pills.forEach((p, i) => { const q = eOutBack(prog(t, 49.3 + i * .09, 49.85 + i * .09)); p.style.opacity = clamp(q); p.style.transform = `translateY(${(1 - q) * 30}px) scale(${lerp(.9, 1, clamp(q))})`; });
+    const end = prog(t, DURATION - .6, DURATION);
+    el.style.filter = `brightness(${1 - end})`;
+  };
+});
+
+// ---------- 렌더 ----------
+window.render = (t) => {
+  for (const s of scenes) {
+    const vis = t >= s.a && t < s.b + (s.b >= DURATION ? 1 : 0);
+    s.el.style.display = vis ? 'block' : 'none';
+    if (!vis) continue;
+    const fi = s.a <= 0 ? 1 : prog(t, s.a, s.a + FADE);
+    const fo = s.b >= DURATION ? 1 : 1 - prog(t, s.b - FADE, s.b);
+    s.el.style.opacity = Math.min(fi, fo);
+    s.update(t);
+  }
+};
+window.DURATION = DURATION;
+window.ready = async () => {
+  await document.fonts.ready;
+  await Promise.all([...document.images].map((im) => (im.complete ? null : new Promise((r) => { im.onload = im.onerror = r; }))));
+  await Promise.all([...document.images].map((im) => im.decode().catch(() => {})));
+  return true;
+};
+render(0);
+</script>
+</body>
+</html>

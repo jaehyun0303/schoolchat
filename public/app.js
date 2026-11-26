@@ -546,6 +546,10 @@ function msgMenu(m) {
     const open = pop.hidden;
     document.querySelectorAll('.mm-p').forEach((x) => { x.hidden = true; });
     pop.hidden = !open;
+    if (open) { // 화면 아래쪽이면 메뉴를 위로 열어서 잘리지 않게
+      pop.classList.remove('up');
+      if (pop.getBoundingClientRect().bottom > el.msgs.getBoundingClientRect().bottom - 4) pop.classList.add('up');
+    }
   });
   wrap.append(btn, pop);
   return wrap;
