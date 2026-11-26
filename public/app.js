@@ -561,16 +561,16 @@ function editBox(m) {
     h('div', { class: 'edit-a' }, h('button', { type: 'button', onclick: cancel }, '취소'), h('button', { type: 'button', class: 'ok', onclick: save }, '저장')));
 }
 
-// 사진은 5MB 제한이라, 큰 사진(GIF 제외)은 브라우저에서 먼저 줄여서 보내요.
+// 사진은 2MB 제한이라, 큰 사진(GIF 제외)은 브라우저에서 먼저 줄여서 보내요.
 async function shrinkImage(file) {
-  if (file.type === 'image/gif' || (file.size < 800 * 1024)) return file;
+  if (file.type === 'image/gif' || file.size < 300 * 1024) return file;
   try {
     const bmp = await createImageBitmap(file);
-    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
     const cv = document.createElement('canvas');
     cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
     cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
-    const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.85));
+    const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.8));
     return blob && blob.size < file.size ? blob : file;
   } catch { return file; }
 }
@@ -581,7 +581,7 @@ async function sendImage(file) {
   el.attachBtn.disabled = true;
   try {
     const body = await shrinkImage(file);
-    if (body.size > 5 * 1024 * 1024) throw new Error('이미지는 5MB 이하만 보낼 수 있어요.');
+    if (body.size > 2 * 1024 * 1024) throw new Error('이미지는 2MB 이하만 보낼 수 있어요.');
     const res = await fetch(`/api/convs/${id}/images`, { method: 'POST', body, headers: { 'Content-Type': 'application/octet-stream' }, credentials: 'same-origin' });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '사진을 보내지 못했어요.');
   } catch (ex) { toast(ex.message); }

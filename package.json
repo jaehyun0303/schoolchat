@@ -5,12 +5,15 @@
   "private": true,
   "type": "commonjs",
   "main": "server.js",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node test/smoke.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "express": "^4.21.2",
     "ws": "^8.18.0"
   }
