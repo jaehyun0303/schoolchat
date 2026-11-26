@@ -248,3 +248,5 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{
 .doc th{background:#F1F2F7}
 .doc .box{background:#fff;border:1px solid #E1E4EE;border-radius:14px;padding:14px 18px;margin:12px 0}
 .doc .back{display:inline-block;margin-bottom:20px;color:#4F46E5;text-decoration:underline}
+.btn-install{width:100%;height:48px;margin-top:10px;border-radius:12px;border:0;background:#4F46E5;color:#fff;font-size:15px;font-weight:700}
+.install-hint{margin:14px 4px 0;font-size:13px;color:#5B6172;line-height:1.6}

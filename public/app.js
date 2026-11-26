@@ -387,6 +387,8 @@ function renderSide() {
     el.list.replaceChildren(h('div', { class: 'settings' },
       h('div', { class: 'me-card' }, avatar('dm', S.me.id, S.me.nickname, 52, true), h('div', null, h('b', null, S.me.nickname), h('span', null, '@' + S.me.username))),
       h('button', { class: 'btn-out', onclick: logout }, '로그아웃'),
+      installEvt && h('button', { class: 'btn-install', onclick: async () => { installEvt.prompt(); await installEvt.userChoice; installEvt = null; renderSide(); } }, '앱으로 설치하기'),
+      !installEvt && !matchMedia('(display-mode: standalone)').matches && h('p', { class: 'install-hint' }, '앱으로 쓰려면 브라우저 메뉴(⋮)에서 "앱 설치" 또는 "홈 화면에 추가"를 눌러요.'),
       h('div', { class: 'legal-links' }, h('a', { href: '/terms.html', target: '_blank' }, '이용약관·운영정책'), h('a', { href: '/privacy.html', target: '_blank' }, '개인정보처리방침')),
       h('button', { class: 'btn-del', onclick: deleteAccount }, '회원 탈퇴')));
     return;
@@ -833,6 +835,12 @@ function onUpdate(m) {
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.active) markRead(S.active); });
 // '몇 분 전' 표시가 낡지 않도록 1분마다 갱신
 setInterval(() => { if (S.me && el.app) { renderChatHeader(); renderPeople(); if (S.nav === 'friends') renderSide(); } }, 60000);
+
+// ---------- 앱 설치 (PWA) ----------
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (S.me && el.app) renderSide(); });
+window.addEventListener('appinstalled', () => { installEvt = null; if (S.me && el.app) renderSide(); toast('앱이 설치됐어요!'); });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 // ---------- 시작 ----------
 async function boot() {
