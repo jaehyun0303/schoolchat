@@ -14,3 +14,29 @@ self.addEventListener('fetch', (e) => {
     return res;
   }).catch(() => caches.match(req).then((r) => r || caches.match('/'))));
 });
+
+// ----- 푸시 알림 -----
+// 앱 화면을 보고 있을 때는 알림을 띄우지 않아요(이미 화면에 보이니까).
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data.json(); } catch { /* 무시 */ }
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (wins.some((c) => c.visibilityState === 'visible' && c.focused)) return;
+    await self.registration.showNotification(d.title || '디톡', {
+      body: d.body || '새 메시지가 왔어요', icon: '/icon-192.png', badge: '/icon-192.png',
+      tag: 'conv-' + d.convId, renotify: true, data: { convId: d.convId }
+    });
+  })());
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const convId = e.notification.data && e.notification.data.convId;
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const w of wins) {
+      if ('focus' in w) { await w.focus(); w.postMessage({ type: 'open-conv', convId }); return; }
+    }
+    await self.clients.openWindow('/?conv=' + convId);
+  })());
+});

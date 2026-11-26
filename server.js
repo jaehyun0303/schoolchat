@@ -6,12 +6,14 @@ const crypto = require('node:crypto');
 const { createClient } = require('@libsql/client');
 const express = require('express');
 const { WebSocketServer } = require('ws');
+const webpush = require('web-push');
 
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 const SESSION_DAYS = 30;
 const MAX_MSG = 1000;
 const MAX_IMG = 2 * 1024 * 1024;
+const MAX_FILE = 3 * 1024 * 1024;
 
 // ---------- 데이터베이스 ----------
 // TURSO_DATABASE_URL 이 있으면 Turso(무료 클라우드 DB)에, 없으면 내 컴퓨터의 파일에 저장해요.
@@ -79,14 +81,53 @@ CREATE TABLE IF NOT EXISTS images (
   mime TEXT NOT NULL,
   data BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS push_subs (
+  endpoint TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS push_user ON push_subs(user_id);
 `;
 
 async function initDb() {
   await client.executeMultiple(SCHEMA);
   // 예전 버전에서 만든 DB를 위한 열 추가 (이미 있으면 무시)
-  for (const col of ['edited_at INTEGER', 'deleted INTEGER NOT NULL DEFAULT 0', 'image TEXT']) {
+  for (const col of ['edited_at INTEGER', 'deleted INTEGER NOT NULL DEFAULT 0', 'image TEXT', 'file TEXT', 'file_name TEXT', 'file_size INTEGER']) {
     try { await client.execute('ALTER TABLE messages ADD COLUMN ' + col); } catch { /* 이미 있음 */ }
   }
+  await initPush();
+}
+
+// ---------- 푸시 알림 (Web Push) ----------
+// 암호 키(VAPID)는 처음 켜질 때 자동으로 만들어 DB에 저장해요. 환경 변수로 직접 지정할 수도 있어요.
+let VAPID_PUBLIC = '';
+async function initPush() {
+  let pub = process.env.VAPID_PUBLIC_KEY, priv = process.env.VAPID_PRIVATE_KEY;
+  if (!pub || !priv) {
+    const a = await get("SELECT value FROM kv WHERE key = 'vapid_public'");
+    const b = await get("SELECT value FROM kv WHERE key = 'vapid_private'");
+    if (a && b) { pub = a.value; priv = b.value; }
+    else {
+      const k = webpush.generateVAPIDKeys();
+      await run("INSERT OR IGNORE INTO kv (key, value) VALUES ('vapid_public', ?)", [k.publicKey]);
+      await run("INSERT OR IGNORE INTO kv (key, value) VALUES ('vapid_private', ?)", [k.privateKey]);
+      pub = (await get("SELECT value FROM kv WHERE key = 'vapid_public'")).value;
+      priv = (await get("SELECT value FROM kv WHERE key = 'vapid_private'")).value;
+    }
+  }
+  VAPID_PUBLIC = pub;
+  webpush.setVapidDetails('mailto:' + (process.env.CONTACT_EMAIL || 'admin@example.com'), pub, priv);
+}
+// 구독 주소로 서버가 요청을 보내므로, 알려진 푸시 서비스 주소만 허용해요 (내부망 접근 방지)
+function allowedPushEndpoint(ep) {
+  let u;
+  try { u = new URL(ep); } catch { return false; }
+  if (process.env.PUSH_TEST_HOST && u.host === process.env.PUSH_TEST_HOST) return true;
+  if (u.protocol !== 'https:' || u.port) return false;
+  return /(^|\.)(googleapis\.com|push\.services\.mozilla\.com|push\.apple\.com|notify\.windows\.com|push\.samsung\.com)$/.test(u.hostname);
 }
 
 // ---------- 비밀번호 / 세션 ----------
@@ -184,7 +225,8 @@ const pubUser = (u) => ({ id: u.id, nickname: u.nickname, online: isOnline(u.id)
 const pubMsg = (m) => ({
   id: m.id, convId: m.conv_id, userId: m.user_id, at: m.created_at,
   text: m.deleted ? '' : m.text, deleted: !!m.deleted, editedAt: m.edited_at || null,
-  image: !m.deleted && m.image ? '/api/images/' + m.image : null
+  image: !m.deleted && m.image ? '/api/images/' + m.image : null,
+  file: !m.deleted && m.file ? { url: '/api/files/' + m.file, name: m.file_name, size: m.file_size } : null
 });
 
 // 내가 속한 대화 목록(멤버·마지막 메시지·안 읽은 수 포함)을 쿼리 4번으로 한 번에 만든다
@@ -232,6 +274,29 @@ async function newCode() {
 async function pushMessage(convId, messageRow, type = 'message') {
   const msg = pubMsg(messageRow);
   for (const mid of await memberIds(convId)) sendTo(mid, { type, message: msg });
+  if (type === 'message') notifyPush(convId, msg).catch((e) => console.error('푸시 오류:', e.message));
+}
+
+async function notifyPush(convId, msg) {
+  const targets = (await memberIds(convId)).filter((id) => id !== msg.userId);
+  if (!targets.length) return;
+  const subs = await all(`SELECT * FROM push_subs WHERE user_id IN (${targets.map(() => '?').join(',')})`, targets);
+  if (!subs.length) return;
+  const conv = await get('SELECT kind, name FROM convs WHERE id = ?', [convId]);
+  const sender = (await get('SELECT nickname FROM users WHERE id = ?', [msg.userId]))?.nickname || '친구';
+  const preview = msg.image ? '사진을 보냈어요' : msg.file ? '파일을 보냈어요: ' + msg.file.name : msg.text.replace(/\s+/g, ' ').slice(0, 120);
+  const payload = JSON.stringify({
+    title: conv.kind === 'dm' ? sender : conv.name,
+    body: conv.kind === 'dm' ? preview : sender + ': ' + preview,
+    convId
+  });
+  await Promise.all(subs.map(async (sub) => {
+    try {
+      await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload, { TTL: 3600, timeout: 8000 });
+    } catch (e) {
+      if (e.statusCode === 404 || e.statusCode === 410) await run('DELETE FROM push_subs WHERE endpoint = ?', [sub.endpoint]).catch(() => {});
+    }
+  }));
 }
 
 // ---------- HTTP ----------
@@ -322,6 +387,8 @@ app.post('/api/me/delete', auth, wrap(async (req, res) => {
   const t = await client.transaction('write');
   try {
     await t.execute({ sql: 'DELETE FROM images WHERE name IN (SELECT image FROM messages WHERE user_id = ? AND image IS NOT NULL)', args: [id] });
+    await t.execute({ sql: 'DELETE FROM images WHERE name IN (SELECT file FROM messages WHERE user_id = ? AND file IS NOT NULL)', args: [id] });
+    await t.execute({ sql: 'DELETE FROM push_subs WHERE user_id = ?', args: [id] });
     for (const c of dms) {
       await t.execute({ sql: 'DELETE FROM images WHERE conv_id = ?', args: [c] });
       await t.execute({ sql: 'DELETE FROM messages WHERE conv_id = ?', args: [c] });
@@ -339,6 +406,23 @@ app.post('/api/me/delete', auth, wrap(async (req, res) => {
   for (const ws of sockets.get(id) || []) ws.close();
   res.setHeader('Set-Cookie', 'sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
   broadcast({ type: 'user_removed', userId: id });
+  res.json({ ok: true });
+}));
+
+app.get('/api/push/key', auth, (req, res) => res.json({ key: VAPID_PUBLIC }));
+app.post('/api/push/subscribe', auth, wrap(async (req, res) => {
+  const { endpoint, keys } = req.body.subscription || {};
+  if (typeof endpoint !== 'string' || endpoint.length > 1000 || !keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string') {
+    return bad(res, '알림 정보가 올바르지 않아요.');
+  }
+  if (!allowedPushEndpoint(endpoint)) return bad(res, '지원하지 않는 알림 서비스예요.');
+  await run(`INSERT INTO push_subs (endpoint, user_id, p256dh, auth, created_at) VALUES (?,?,?,?,?)
+             ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+    [endpoint, req.user.id, keys.p256dh, keys.auth, Date.now()]);
+  res.json({ ok: true });
+}));
+app.post('/api/push/unsubscribe', auth, wrap(async (req, res) => {
+  await run('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?', [String(req.body.endpoint || ''), req.user.id]);
   res.json({ ok: true });
 }));
 
@@ -453,8 +537,53 @@ app.get('/api/images/:name', auth, wrap(async (req, res) => {
   res.send(Buffer.from(row.data));
 }));
 
+// ----- 파일 (문서 등). 허용한 확장자만 받고, 내려받을 때는 항상 "다운로드"로만 내려줘요 -----
+const FILE_TYPES = {
+  pdf: 'application/pdf', hwp: 'application/x-hwp', hwpx: 'application/hwp+zip',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  txt: 'text/plain', csv: 'text/csv', rtf: 'application/rtf', md: 'text/plain',
+  odt: 'application/vnd.oasis.opendocument.text', ods: 'application/vnd.oasis.opendocument.spreadsheet', odp: 'application/vnd.oasis.opendocument.presentation',
+  zip: 'application/zip', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav'
+};
+const cleanName = (n) => String(n || '').replace(/[\u0000-\u001f\u007f\\/:*?"<>|]/g, '_').replace(/^\.+/, '').trim().slice(0, 100);
+
+app.post('/api/convs/:id/files', auth, express.raw({ type: () => true, limit: MAX_FILE }), wrap(async (req, res) => {
+  const convId = Number(req.params.id);
+  if (!(await isMember(convId, req.user.id))) return bad(res, '참여 중인 채팅이 아니에요.', 403);
+  const name = cleanName(req.query.name);
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (!name || !FILE_TYPES[ext] || name.split('.').length < 2) return bad(res, '보낼 수 없는 파일 형식이에요. (문서, 압축, 음성 파일만 가능)');
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || !buf.length) return bad(res, '파일을 선택해 주세요.');
+  const blob = crypto.randomBytes(16).toString('hex') + '.' + ext;
+  await run('INSERT INTO images (name, conv_id, mime, data) VALUES (?,?,?,?)', [blob, convId, FILE_TYPES[ext], buf]);
+  const r = await run('INSERT INTO messages (conv_id, user_id, text, created_at, file, file_name, file_size) VALUES (?,?,?,?,?,?,?)',
+    [convId, req.user.id, '', Date.now(), blob, name, buf.length]);
+  await markRead(convId, req.user.id);
+  await pushMessage(convId, await get('SELECT * FROM messages WHERE id = ?', [r.id]));
+  res.json({ ok: true });
+}));
+
+app.get('/api/files/:name', auth, wrap(async (req, res) => {
+  const name = req.params.name;
+  if (!/^[a-f0-9]{32}\.[a-z0-9]{2,5}$/.test(name)) return bad(res, '없는 파일이에요.', 404);
+  const row = await get(`SELECT i.conv_id, i.mime, i.data, m.file_name FROM images i JOIN messages m ON m.file = i.name
+                         WHERE i.name = ? AND m.deleted = 0`, [name]);
+  if (!row) return bad(res, '없는 파일이에요.', 404);
+  if (!(await isMember(row.conv_id, req.user.id))) return bad(res, '볼 수 없는 파일이에요.', 403);
+  res.setHeader('Content-Type', row.mime);
+  const star = encodeURIComponent(row.file_name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  // 표준(RFC 6266) 방식: 대체 이름 + 한글 이름(filename*). 최신 브라우저는 filename*를 써요.
+  res.setHeader('Content-Disposition', `attachment; filename="file.${name.split('.').pop()}"; filename*=UTF-8''${star}`);
+  res.setHeader('Content-Security-Policy', 'sandbox');
+  res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+  res.send(Buffer.from(row.data));
+}));
+
 app.use((err, req, res, next) => {
-  if (err && err.type === 'entity.too.large') return bad(res, '이미지는 2MB 이하만 보낼 수 있어요.', 413);
+  if (err && err.type === 'entity.too.large') return bad(res, req.path.endsWith('/files') ? '파일은 3MB 이하만 보낼 수 있어요.' : '이미지는 2MB 이하만 보낼 수 있어요.', 413);
   if (err) return bad(res, '요청을 처리하지 못했어요.');
   next();
 });
@@ -488,11 +617,11 @@ async function handleWs(uid, m) {
     if (!row || row.conv_id !== convId || row.user_id !== uid || row.deleted) return;
     if (m.type === 'edit') {
       const text = String(m.text || '').replace(/\r\n/g, '\n').trim();
-      if (row.image || !text || [...text].length > MAX_MSG) return;
+      if (row.image || row.file || !text || [...text].length > MAX_MSG) return;
       await run('UPDATE messages SET text = ?, edited_at = ? WHERE id = ?', [text, Date.now(), row.id]);
     } else {
-      await run("UPDATE messages SET deleted = 1, text = '', image = NULL WHERE id = ?", [row.id]);
-      if (row.image) await run('DELETE FROM images WHERE name = ?', [row.image]);
+      await run("UPDATE messages SET deleted = 1, text = '', image = NULL, file = NULL, file_name = NULL WHERE id = ?", [row.id]);
+      for (const b of [row.image, row.file]) if (b) await run('DELETE FROM images WHERE name = ?', [b]);
     }
     await pushMessage(convId, await get('SELECT * FROM messages WHERE id = ?', [row.id]), 'message_update');
   } else if (m.type === 'read') {

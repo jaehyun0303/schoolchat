@@ -6,12 +6,24 @@ const os = require('node:os');
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
 const WebSocket = require('ws');
+const https = require('node:https');
+const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 
 const PORT = 3900 + Math.floor(Math.random() * 90);
 const base = `http://127.0.0.1:${PORT}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dtalk-'));
+// 푸시 서비스 흉내(https). 서버가 알림을 실제로 보내는지 확인하려고 자체 서명 인증서를 써요.
+const certDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dtalk-cert-'));
+execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(certDir, 'k.pem'), '-out', path.join(certDir, 'c.pem'),
+  '-days', '2', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost'], { stdio: 'ignore' });
+const PUSH_PORT = PORT + 100;
+const pushHits = [];
+const pushSrv = https.createServer({ key: fs.readFileSync(path.join(certDir, 'k.pem')), cert: fs.readFileSync(path.join(certDir, 'c.pem')) }, (req, res) => {
+  pushHits.push({ url: req.url, auth: req.headers.authorization }); req.resume(); res.statusCode = 201; res.end();
+}).listen(PUSH_PORT);
 const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-  env: { ...process.env, PORT, DB_PATH: path.join(tmp, 't.db') }, stdio: ['ignore', 'pipe', 'inherit']
+  env: { ...process.env, PORT, DB_PATH: path.join(tmp, 't.db'), PUSH_TEST_HOST: 'localhost:' + PUSH_PORT, NODE_EXTRA_CA_CERTS: path.join(certDir, 'c.pem') }, stdio: ['ignore', 'pipe', 'inherit']
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -107,6 +119,37 @@ function connect(cookie) {
   const after = (await call(b.cookie, '/api/convs/' + rid + '/messages')).json.messages.find((m) => m.id === im.id);
   assert.equal(after.deleted, true); assert.equal(after.image, null);
 
+  // --- 파일 전송 ---
+  const up2 = (cookie, name, body) => fetch(base + `/api/convs/${rid}/files?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { cookie }, body });
+  assert.equal((await up2(a.cookie, '악성.exe', Buffer.from('MZ'))).status, 400, '실행 파일 거부');
+  assert.equal((await up2(a.cookie, 'x.html', Buffer.from('<script>'))).status, 400, 'html 거부');
+  assert.equal((await up2(a.cookie, 'pdf', Buffer.from('x'))).status, 400, '확장자 없는 파일 거부');
+  assert.equal((await up2(a.cookie, '큰파일.zip', Buffer.alloc(3 * 1024 * 1024 + 10))).status, 413, '3MB 초과 거부');
+  assert.equal((await up2(a.cookie, '과제 보고서.pdf', Buffer.from('%PDF-1.4 test'))).status, 200, '파일 업로드');
+  const fmsg = (await call(b.cookie, '/api/convs/' + rid + '/messages')).json.messages.find((m) => m.file);
+  assert.equal(fmsg.file.name, '과제 보고서.pdf');
+  const dl = await fetch(base + fmsg.file.url, { headers: { cookie: b.cookie } });
+  assert.equal(dl.status, 200, '멤버는 다운로드');
+  assert.match(dl.headers.get('content-disposition'), /^attachment/, '항상 다운로드로');
+  assert.equal(await dl.text(), '%PDF-1.4 test');
+  assert.equal((await fetch(base + fmsg.file.url, { headers: { cookie: outsider.cookie } })).status, 403, '비멤버 다운로드 불가');
+  assert.ok(wsB2.events.some((e) => e.type === 'message' && e.message.file), '파일 메시지 실시간 전달');
+
+  // --- 푸시 알림 ---
+  assert.ok((await call(b.cookie, '/api/push/key')).json.key.length > 40, 'VAPID 공개키');
+  const ecdh = crypto.createECDH('prime256v1'); ecdh.generateKeys();
+  const sub = { endpoint: `https://localhost:${PUSH_PORT}/push/abc`, keys: { p256dh: ecdh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') } };
+  assert.equal((await call(b.cookie, '/api/push/subscribe', { subscription: { endpoint: 'https://127.0.0.1/evil', keys: sub.keys } })).status, 400, '허용되지 않은 알림 주소 거부');
+  assert.equal((await call(b.cookie, '/api/push/subscribe', { subscription: sub })).status, 200, '알림 구독');
+  wsA.send(JSON.stringify({ type: 'send', convId: rid, text: '알림 테스트' }));
+  await sleep(600);
+  assert.equal(pushHits.length, 1, '받는 사람에게만 푸시 1건');
+  assert.match(pushHits[0].auth, /^vapid /, 'VAPID 서명 포함');
+  await call(b.cookie, '/api/push/unsubscribe', { endpoint: sub.endpoint });
+  wsA.send(JSON.stringify({ type: 'send', convId: rid, text: '구독 해제 후' }));
+  await sleep(400);
+  assert.equal(pushHits.length, 1, '구독 해제 후에는 푸시 없음');
+
   // --- 회원 탈퇴 ---
   assert.equal((await call(outsider.cookie, '/api/me/delete', { password: 'wrong-password' })).status, 401, '탈퇴 시 비밀번호 확인');
   assert.equal((await call(a.cookie, '/api/me/delete', { password: 'password123' })).status, 200, '탈퇴 성공');
@@ -124,4 +167,4 @@ function connect(cookie) {
   st = await call(c3.cookie, '/api/state');
   assert.equal(st.json.users.find((u) => u.id === minjun.id).online, false, '접속 종료 후 오프라인');
   console.log('모든 스모크 테스트 통과');
-})().then(() => { srv.kill(); process.exit(0); }, (e) => { console.error(e); srv.kill(); process.exit(1); });
+})().then(() => { srv.kill(); pushSrv.close(); process.exit(0); }, (e) => { console.error(e); srv.kill(); process.exit(1); });

@@ -250,3 +250,10 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{
 .doc .back{display:inline-block;margin-bottom:20px;color:#4F46E5;text-decoration:underline}
 .btn-install{width:100%;height:48px;margin-top:10px;border-radius:12px;border:0;background:#4F46E5;color:#fff;font-size:15px;font-weight:700}
 .install-hint{margin:14px 4px 0;font-size:13px;color:#5B6172;line-height:1.6}
+.m .b.filecard{display:flex;align-items:center;gap:12px;padding:10px 14px;min-width:220px;max-width:320px;color:inherit}
+.m.me .b.filecard{background:#4F46E5;color:#fff}
+.filecard .fic{width:40px;height:40px;border-radius:12px;background:#EEF0FF;color:#3730A3;display:flex;align-items:center;justify-content:center;flex:none}
+.m.me .filecard .fic{background:rgba(255,255,255,.18);color:#fff}
+.filecard .fmeta{min-width:0;display:flex;flex-direction:column;line-height:1.35}
+.filecard .fmeta b{font-size:14px;overflow-wrap:anywhere;font-weight:700}
+.filecard .fmeta i{font-style:normal;font-size:12px;opacity:.8}

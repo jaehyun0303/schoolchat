@@ -276,7 +276,7 @@ const peerOf = (c) => user(c.members.find((m) => m !== S.me.id) ?? S.me.id);
 const convName = (c) => (c.kind === 'dm' ? peerOf(c).nickname : c.name);
 const activeConv = () => S.convs.get(S.active);
 const sortedConvs = () => [...S.convs.values()].sort((a, b) => (b.last?.at || b.createdAt) - (a.last?.at || a.createdAt));
-const previewOf = (m) => (m.deleted ? '삭제된 메시지입니다' : m.image ? '사진을 보냈어요' : m.text.replace(/\s+/g, ' '));
+const previewOf = (m) => (m.deleted ? '삭제된 메시지입니다' : m.image ? '사진을 보냈어요' : m.file ? '파일: ' + m.file.name : m.text.replace(/\s+/g, ' '));
 const totalUnread = () => [...S.convs.values()].reduce((n, c) => n + c.unread, 0);
 
 function updateTitle() {
@@ -333,8 +333,8 @@ function buildApp() {
   });
   el.composer = h('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); sendMessage(); } },
     h('div', { class: 'comp-box' },
-      (el.attachBtn = h('button', { type: 'button', class: 'attach', 'aria-label': '사진 보내기', title: '사진 보내기', onclick: () => el.file.click() }, svg(IC.clip, 22, '#4A5062'))),
-      (el.file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', hidden: true, onchange: () => { sendImage(el.file.files[0]); el.file.value = ''; } })),
+      (el.attachBtn = h('button', { type: 'button', class: 'attach', 'aria-label': '사진·파일 보내기', title: '사진·파일 보내기', onclick: () => el.file.click() }, svg(IC.clip, 22, '#4A5062'))),
+      (el.file = h('input', { type: 'file', hidden: true, onchange: () => { sendAttachment(el.file.files[0]); el.file.value = ''; } })),
       h('label', { class: 'sr', for: 'msg' }, '메시지 입력'), el.input, el.sendBtn));
   el.conn = h('div', { class: 'conn', hidden: true, role: 'status' }, '연결이 끊겼어요. 다시 연결하는 중…');
   el.chat = h('main', { class: 'chat' });
@@ -387,6 +387,7 @@ function renderSide() {
     el.list.replaceChildren(h('div', { class: 'settings' },
       h('div', { class: 'me-card' }, avatar('dm', S.me.id, S.me.nickname, 52, true), h('div', null, h('b', null, S.me.nickname), h('span', null, '@' + S.me.username))),
       h('button', { class: 'btn-out', onclick: logout }, '로그아웃'),
+      pushSection(),
       installEvt && h('button', { class: 'btn-install', onclick: async () => { installEvt.prompt(); await installEvt.userChoice; installEvt = null; renderSide(); } }, '앱으로 설치하기'),
       !installEvt && !matchMedia('(display-mode: standalone)').matches && h('p', { class: 'install-hint' }, '앱으로 쓰려면 브라우저 메뉴(⋮)에서 "앱 설치" 또는 "홈 화면에 추가"를 눌러요.'),
       h('div', { class: 'legal-links' }, h('a', { href: '/terms.html', target: '_blank' }, '이용약관·운영정책'), h('a', { href: '/privacy.html', target: '_blank' }, '개인정보처리방침')),
@@ -513,6 +514,10 @@ function renderMessages(scrollEnd) {
       const img = h('img', { src: m.image, alt: '보낸 사진', loading: 'lazy' });
       img.addEventListener('load', () => { if (stick) box.scrollTop = box.scrollHeight; });
       body = h('a', { class: 'b img', href: m.image, target: '_blank', rel: 'noopener', 'aria-label': '사진 크게 보기' }, img);
+    } else if (m.file) {
+      body = h('a', { class: 'b filecard', href: m.file.url, download: m.file.name, 'aria-label': m.file.name + ' 다운로드' },
+        h('span', { class: 'fic' }, svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>', 22, 'currentColor', 1.8)),
+        h('span', { class: 'fmeta' }, h('b', null, m.file.name), h('i', null, fmtSize(m.file.size) + ' · 눌러서 받기')));
     } else { body = h('div', { class: 'b' }); highlight(body, m.text, S.find); }
     const canAct = me && !m.deleted && S.editing !== m.id;
     const menu = canAct && msgMenu(m);
@@ -532,7 +537,7 @@ function msgMenu(m) {
   const wrap = h('div', { class: 'mm' });
   const btn = h('button', { class: 'mm-b', type: 'button', 'aria-label': '메시지 메뉴', 'aria-haspopup': 'true' }, svg('<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>', 18, '#4A5062', 2.4));
   const pop = h('div', { class: 'mm-p', role: 'menu', hidden: true },
-    !m.image && h('button', { role: 'menuitem', type: 'button', onclick: () => { S.editing = m.id; renderMessages(false); const t = $('.edit-in'); t && (t.focus(), t.setSelectionRange(t.value.length, t.value.length)); } }, '수정'),
+    !m.image && !m.file && h('button', { role: 'menuitem', type: 'button', onclick: () => { S.editing = m.id; renderMessages(false); const t = $('.edit-in'); t && (t.focus(), t.setSelectionRange(t.value.length, t.value.length)); } }, '수정'),
     h('button', { role: 'menuitem', type: 'button', class: 'danger', onclick: () => {
       if (confirm('이 메시지를 전송 취소할까요? 모두에게서 삭제돼요.')) wsSend({ type: 'delete', convId: m.convId, id: m.id });
     } }, '전송 취소'));
@@ -578,6 +583,20 @@ async function shrinkImage(file) {
     const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.8));
     return blob && blob.size < file.size ? blob : file;
   } catch { return file; }
+}
+const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB');
+async function sendAttachment(file) {
+  if (!file) return;
+  if (file.type.startsWith('image/')) return sendImage(file);
+  if (!S.active) return;
+  if (file.size > 3 * 1024 * 1024) return toast('파일은 3MB 이하만 보낼 수 있어요.');
+  const id = S.active;
+  el.attachBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/convs/${id}/files?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' }, credentials: 'same-origin' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '파일을 보내지 못했어요.');
+  } catch (ex) { toast(ex.message); }
+  el.attachBtn.disabled = false;
 }
 async function sendImage(file) {
   if (!file || !S.active) return;
@@ -677,6 +696,7 @@ function sendMessage() {
 }
 
 async function logout() {
+  await dropPushOnLogout();
   try { await api('/api/logout', {}); } catch { /* 무시 */ }
   S.ws && (S.ws.onclose = null, S.ws.close());
   clearTimeout(S.wsTimer);
@@ -691,6 +711,8 @@ async function deleteAccount() {
   const password = prompt('확인을 위해 비밀번호를 입력해 주세요.');
   if (!password) return;
   try { await api('/api/me/delete', { password }); } catch (ex) { return toast(ex.message); }
+  try { localStorage.removeItem('push:' + S.me.id); } catch { /* 무시 */ }
+  dropPushOnLogout();
   S.ws && (S.ws.onclose = null, S.ws.close());
   clearTimeout(S.wsTimer);
   Object.assign(S, { me: null, active: null, nav: 'chats', ws: null });
@@ -836,6 +858,67 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && S.
 // '몇 분 전' 표시가 낡지 않도록 1분마다 갱신
 setInterval(() => { if (S.me && el.app) { renderChatHeader(); renderPeople(); if (S.nav === 'friends') renderSide(); } }, 60000);
 
+// ---------- 푸시 알림 ----------
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const b64ToU8 = (b) => { const p = '='.repeat((4 - b.length % 4) % 4); const r = atob((b + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(r, (c) => c.charCodeAt(0)); };
+async function currentSub() {
+  if (!pushSupported()) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+async function refreshPush() {
+  if (!pushSupported()) S.push = 'unsupported';
+  else if (Notification.permission === 'denied') S.push = 'denied';
+  else S.push = (await currentSub()) && Notification.permission === 'granted' ? 'on' : 'off';
+  if (S.me && el.app && S.nav === 'settings') renderSide();
+}
+function pushSection() {
+  const st = S.push || 'off';
+  if (st === 'unsupported') return h('p', { class: 'install-hint' }, '이 브라우저는 알림을 지원하지 않아요. (아이폰/아이패드는 앱을 홈 화면에 설치해야 알림이 와요.)');
+  if (st === 'denied') return h('p', { class: 'install-hint' }, '알림이 차단돼 있어요. 브라우저 주소창 왼쪽 자물쇠 → 사이트 설정에서 알림을 허용해 주세요.');
+  return h('button', { class: st === 'on' ? 'btn-line' : 'btn-install', style: 'height:48px;margin-top:10px;font-size:15px', onclick: st === 'on' ? disablePush : enablePush },
+    st === 'on' ? '알림 끄기' : '알림 켜기');
+}
+async function enablePush() {
+  try {
+    if ((await Notification.requestPermission()) !== 'granted') { toast('알림이 허용되지 않았어요.'); return refreshPush(); }
+    const reg = await navigator.serviceWorker.ready;
+    const { key } = await api('/api/push/key');
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
+    await api('/api/push/subscribe', { subscription: sub.toJSON() });
+    try { localStorage.setItem('push:' + S.me.id, '1'); } catch { /* 무시 */ }
+    toast('알림을 켰어요!');
+  } catch (ex) { toast('알림을 켜지 못했어요: ' + ex.message); }
+  refreshPush();
+}
+async function disablePush() {
+  try {
+    const sub = await currentSub();
+    if (sub) { await api('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
+    try { localStorage.removeItem('push:' + S.me.id); } catch { /* 무시 */ }
+  } catch { /* 무시 */ }
+  refreshPush();
+}
+// 같은 기기를 여러 명이 쓰므로, 로그아웃하면 이 기기의 알림 연결을 끊어요
+async function dropPushOnLogout() {
+  try { const sub = await currentSub(); if (sub) { await api('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); } } catch { /* 무시 */ }
+}
+// 로그인할 때, 이 사용자가 전에 알림을 켠 적이 있으면 조용히 다시 연결해요
+async function restorePush() {
+  try {
+    if (!pushSupported() || Notification.permission !== 'granted' || localStorage.getItem('push:' + S.me.id) !== '1') return;
+    const reg = await navigator.serviceWorker.ready;
+    const { key } = await api('/api/push/key');
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
+    await api('/api/push/subscribe', { subscription: sub.toJSON() });
+  } catch { /* 무시 */ }
+}
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'open-conv' && S.me && S.convs.has(Number(e.data.convId))) openConv(Number(e.data.convId));
+  });
+}
+
 // ---------- 앱 설치 (PWA) ----------
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (S.me && el.app) renderSide(); });
@@ -852,6 +935,10 @@ async function boot() {
   S.retry = 0;
   renderAll();
   connectWs();
+  restorePush();
+  refreshPush();
+  const wanted = Number(new URLSearchParams(location.search).get('conv'));
+  if (wanted && S.convs.has(wanted)) { history.replaceState(null, '', '/'); openConv(wanted); }
 }
 
 boot();
