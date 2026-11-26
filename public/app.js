@@ -246,7 +246,8 @@ function showSignup() {
     h('label', { class: 'l', for: 'pw1', style: 'margin-bottom:6px' }, '비밀번호'), pw1.node,
     h('div', { class: 'meter', style: 'margin-top:8px' }, ...bars, lvl),
     h('label', { class: 'l', for: 'pw2', style: 'margin-bottom:6px' }, '비밀번호 확인'), pw2,
-    h('label', { class: 'chk', style: 'margin-bottom:8px' }, terms, '이용약관과 개인정보 처리에 동의해요'),
+    h('label', { class: 'chk', style: 'margin-bottom:0' }, terms, h('span', null, h('a', { href: '/terms.html', target: '_blank', style: 'text-decoration:underline' }, '이용약관·운영정책'), '과 ', h('a', { href: '/privacy.html', target: '_blank', style: 'text-decoration:underline' }, '개인정보처리방침'), '에 동의해요')),
+    h('div', { class: 'hint', style: 'margin:0 0 6px 30px;min-height:0;font-size:12px' }, '만 14세 미만은 보호자(법정대리인) 동의가 필요할 수 있어요.'),
     submit);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -385,7 +386,9 @@ function renderSide() {
     el.newBtn.hidden = true; el.tabs.hidden = true; el.search.parentElement.hidden = true;
     el.list.replaceChildren(h('div', { class: 'settings' },
       h('div', { class: 'me-card' }, avatar('dm', S.me.id, S.me.nickname, 52, true), h('div', null, h('b', null, S.me.nickname), h('span', null, '@' + S.me.username))),
-      h('button', { class: 'btn-out', onclick: logout }, '로그아웃')));
+      h('button', { class: 'btn-out', onclick: logout }, '로그아웃'),
+      h('div', { class: 'legal-links' }, h('a', { href: '/terms.html', target: '_blank' }, '이용약관·운영정책'), h('a', { href: '/privacy.html', target: '_blank' }, '개인정보처리방침')),
+      h('button', { class: 'btn-del', onclick: deleteAccount }, '회원 탈퇴')));
     return;
   }
   el.search.parentElement.hidden = false;
@@ -681,6 +684,19 @@ async function logout() {
   showLogin();
 }
 
+async function deleteAccount() {
+  if (!confirm('정말 탈퇴할까요?\n내 계정, 내가 보낸 메시지와 사진, 1:1 대화가 모두 삭제되고 되돌릴 수 없어요.')) return;
+  const password = prompt('확인을 위해 비밀번호를 입력해 주세요.');
+  if (!password) return;
+  try { await api('/api/me/delete', { password }); } catch (ex) { return toast(ex.message); }
+  S.ws && (S.ws.onclose = null, S.ws.close());
+  clearTimeout(S.wsTimer);
+  Object.assign(S, { me: null, active: null, nav: 'chats', ws: null });
+  S.users.clear(); S.convs.clear(); S.msgs.clear(); S.more.clear(); S.drafts.clear();
+  showLogin();
+  toast('탈퇴가 완료됐어요.');
+}
+
 async function refreshState() {
   const st = await api('/api/state');
   S.me = st.me;
@@ -777,6 +793,10 @@ function connectWs() {
       renderSide(); renderPeople(); renderChatHeader();
     } else if (d.type === 'message') onMessage(d.message);
     else if (d.type === 'message_update') onUpdate(d.message);
+    else if (d.type === 'user_removed') { // 탈퇴한 사용자가 있으면 목록을 새로 받아와요
+      S.msgs.clear();
+      refreshState().then(() => { if (S.active) loadMessages(S.active); }).catch(() => {});
+    }
   };
   ws.onclose = () => {
     if (!S.me) return;

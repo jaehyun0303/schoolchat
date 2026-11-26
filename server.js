@@ -309,6 +309,39 @@ app.post('/api/logout', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.get('/api/config', (req, res) => res.json({
+  operator: process.env.OPERATOR_NAME || '', contact: process.env.CONTACT_EMAIL || ''
+}));
+
+// 회원 탈퇴: 내 계정, 내가 보낸 메시지·사진, 내 1:1 대화를 모두 삭제해요
+app.post('/api/me/delete', auth, wrap(async (req, res) => {
+  const u = await get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+  if (!checkPw(String(req.body.password || ''), u.pw_hash)) return bad(res, '비밀번호가 맞지 않아요.', 401);
+  const id = u.id;
+  const dms = (await all(`SELECT c.id FROM convs c JOIN members m ON m.conv_id = c.id WHERE c.kind = 'dm' AND m.user_id = ?`, [id])).map((r) => r.id);
+  const t = await client.transaction('write');
+  try {
+    await t.execute({ sql: 'DELETE FROM images WHERE name IN (SELECT image FROM messages WHERE user_id = ? AND image IS NOT NULL)', args: [id] });
+    for (const c of dms) {
+      await t.execute({ sql: 'DELETE FROM images WHERE conv_id = ?', args: [c] });
+      await t.execute({ sql: 'DELETE FROM messages WHERE conv_id = ?', args: [c] });
+      await t.execute({ sql: 'DELETE FROM members WHERE conv_id = ?', args: [c] });
+      await t.execute({ sql: 'DELETE FROM convs WHERE id = ?', args: [c] });
+    }
+    await t.execute({ sql: 'DELETE FROM messages WHERE user_id = ?', args: [id] });
+    await t.execute({ sql: 'DELETE FROM members WHERE user_id = ?', args: [id] });
+    await t.execute({ sql: 'DELETE FROM sessions WHERE user_id = ?', args: [id] });
+    await t.execute({ sql: 'DELETE FROM users WHERE id = ?', args: [id] });
+    await t.commit();
+  } catch (e) { await t.rollback(); throw e; } finally { t.close(); }
+  for (const [k, v] of sessCache) if (v.user.id === id) sessCache.delete(k);
+  memCache.clear();
+  for (const ws of sockets.get(id) || []) ws.close();
+  res.setHeader('Set-Cookie', 'sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
+  broadcast({ type: 'user_removed', userId: id });
+  res.json({ ok: true });
+}));
+
 app.get('/api/state', auth, wrap(async (req, res) => {
   const me = req.user.id;
   const [users, convs] = await Promise.all([

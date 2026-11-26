@@ -15,3 +15,7 @@ services:
         sync: false   # Render 화면에서 직접 입력 (libsql://... 주소)
       - key: TURSO_AUTH_TOKEN
         sync: false   # Render 화면에서 직접 입력 (비밀 토큰 - 절대 깃허브에 올리지 마세요)
+      - key: OPERATOR_NAME
+        sync: false   # 약관·개인정보처리방침에 표시될 운영자 이름 (예: 홍길동)
+      - key: CONTACT_EMAIL
+        sync: false   # 문의·신고를 받을 이메일

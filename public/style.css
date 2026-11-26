@@ -234,3 +234,17 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{
 .edit-a{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}
 .edit-a button{height:36px;padding:0 14px;border-radius:10px;border:0;background:#F1F2F7;color:#3A3F52;font-size:13px;font-weight:500}
 .edit-a button.ok{background:#4F46E5;color:#fff;font-weight:700}
+
+.legal-links{display:flex;gap:14px;justify-content:center;margin:18px 0;font-size:13px}
+.legal-links a{color:#4F46E5;text-decoration:underline;min-height:44px;display:flex;align-items:center}
+.btn-del{width:100%;height:44px;border:0;background:transparent;color:#5B6172;font-size:13px;text-decoration:underline}
+.doc{max-width:760px;margin:0 auto;padding:40px 20px 80px;line-height:1.75;font-size:15px}
+.doc h1{font-size:28px;letter-spacing:-.5px;margin:0 0 6px}
+.doc h2{font-size:18px;margin:32px 0 8px}
+.doc .meta{color:#5B6172;font-size:13px;margin-bottom:24px}
+.doc ul,.doc ol{padding-left:22px;margin:6px 0}
+.doc table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0}
+.doc th,.doc td{border:1px solid #D5D9E5;padding:8px 10px;text-align:left;vertical-align:top}
+.doc th{background:#F1F2F7}
+.doc .box{background:#fff;border:1px solid #E1E4EE;border-radius:14px;padding:14px 18px;margin:12px 0}
+.doc .back{display:inline-block;margin-bottom:20px;color:#4F46E5;text-decoration:underline}

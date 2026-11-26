@@ -107,10 +107,21 @@ function connect(cookie) {
   const after = (await call(b.cookie, '/api/convs/' + rid + '/messages')).json.messages.find((m) => m.id === im.id);
   assert.equal(after.deleted, true); assert.equal(after.image, null);
 
+  // --- 회원 탈퇴 ---
+  assert.equal((await call(outsider.cookie, '/api/me/delete', { password: 'wrong-password' })).status, 401, '탈퇴 시 비밀번호 확인');
+  assert.equal((await call(a.cookie, '/api/me/delete', { password: 'password123' })).status, 200, '탈퇴 성공');
+  assert.equal((await call(a.cookie, '/api/state')).status, 401, '탈퇴 후 세션 무효');
+  st = await call(b.cookie, '/api/state');
+  assert.ok(!st.json.users.some((u) => u.nickname === '제현'), '탈퇴한 사용자는 목록에서 사라짐');
+  assert.ok(!st.json.convs.some((c) => c.id === dm.json.id), '탈퇴한 사용자와의 1:1 대화 삭제');
+  assert.equal((await call(b.cookie, '/api/convs/' + rid + '/messages')).json.messages.length, 0, '탈퇴한 사용자의 메시지 삭제');
+  assert.equal((await call('', '/api/login', { username: 'jehyun', password: 'password123' })).status, 401, '탈퇴 후 로그인 불가');
+  assert.equal((await (await fetch(base + '/api/config')).json()).operator, '', '설정 API');
+  for (const pg of ['/terms.html', '/privacy.html']) assert.equal((await fetch(base + pg)).status, 200, pg);
+
   wsB2.close();
   await sleep(200);
-  assert.ok(wsA.events.some((e) => e.type === 'presence' && e.userId === minjun.id && e.online === false), '오프라인 알림');
-  st = await call(a.cookie, '/api/state');
-  assert.equal(st.json.users.find((u) => u.id === minjun.id).online, false);
+  st = await call(c3.cookie, '/api/state');
+  assert.equal(st.json.users.find((u) => u.id === minjun.id).online, false, '접속 종료 후 오프라인');
   console.log('모든 스모크 테스트 통과');
 })().then(() => { srv.kill(); process.exit(0); }, (e) => { console.error(e); srv.kill(); process.exit(1); });
