@@ -116,7 +116,8 @@ const S = {
   users: new Map(),
   convs: new Map(),
   msgs: new Map(),     // convId -> 메시지 배열
-  more: new Map(),     // convId -> 더 불러올 메시지가 있는지
+  more: new Map(),
+  editing: null,     // convId -> 더 불러올 메시지가 있는지
   active: null,
   nav: 'chats',        // chats | friends | settings
   tab: 'all',
@@ -274,6 +275,7 @@ const peerOf = (c) => user(c.members.find((m) => m !== S.me.id) ?? S.me.id);
 const convName = (c) => (c.kind === 'dm' ? peerOf(c).nickname : c.name);
 const activeConv = () => S.convs.get(S.active);
 const sortedConvs = () => [...S.convs.values()].sort((a, b) => (b.last?.at || b.createdAt) - (a.last?.at || a.createdAt));
+const previewOf = (m) => (m.deleted ? '삭제된 메시지입니다' : m.image ? '사진을 보냈어요' : m.text.replace(/\s+/g, ' '));
 const totalUnread = () => [...S.convs.values()].reduce((n, c) => n + c.unread, 0);
 
 function updateTitle() {
@@ -330,7 +332,8 @@ function buildApp() {
   });
   el.composer = h('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); sendMessage(); } },
     h('div', { class: 'comp-box' },
-      h('button', { type: 'button', class: 'attach', 'aria-label': '파일 첨부 (준비 중)', title: '파일 첨부는 준비 중이에요', disabled: true }, svg(IC.clip, 22, '#4A5062')),
+      (el.attachBtn = h('button', { type: 'button', class: 'attach', 'aria-label': '사진 보내기', title: '사진 보내기', onclick: () => el.file.click() }, svg(IC.clip, 22, '#4A5062'))),
+      (el.file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', hidden: true, onchange: () => { sendImage(el.file.files[0]); el.file.value = ''; } })),
       h('label', { class: 'sr', for: 'msg' }, '메시지 입력'), el.input, el.sendBtn));
   el.conn = h('div', { class: 'conn', hidden: true, role: 'status' }, '연결이 끊겼어요. 다시 연결하는 중…');
   el.chat = h('main', { class: 'chat' });
@@ -362,7 +365,7 @@ function convRow(c) {
   const peer = isDm ? peerOf(c) : null;
   const last = c.last;
   let preview = '아직 대화가 없어요';
-  if (last) preview = (last.userId === S.me.id ? '나: ' : isDm ? '' : user(last.userId).nickname + ': ') + last.text.replace(/\s+/g, ' ');
+  if (last) preview = (last.userId === S.me.id ? '나: ' : isDm ? '' : user(last.userId).nickname + ': ') + previewOf(last);
   const row = h('button', { class: 'row' + (c.id === S.active ? ' act' : ''), onclick: () => openConv(c.id), 'aria-current': c.id === S.active ? 'true' : null },
     avatar(isDm ? 'dm' : 'room', isDm ? peer.id : c.id, convName(c), 44, isDm ? peer.online : undefined),
     h('span', { class: 'mid' },
@@ -486,6 +489,7 @@ function renderMessages(scrollEnd) {
   const box = el.msgs;
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   const prevTop = box.scrollTop;
+  const stick = scrollEnd || nearBottom;
   const nodes = [];
   if (!list) { box.replaceChildren(h('div', { class: 'day' }, '불러오는 중…')); return; }
   if (S.more.get(c.id)) nodes.push(h('button', { class: 'day', style: 'border:0;cursor:pointer', onclick: loadOlder }, '이전 메시지 더 보기'));
@@ -497,17 +501,91 @@ function renderMessages(scrollEnd) {
     if (dk !== lastDay) { nodes.push(h('div', { class: 'day' }, dayLabel(m.at))); lastDay = dk; }
     const me = m.userId === S.me.id;
     const u = user(m.userId);
-    const bubble = h('div', { class: 'b' });
-    highlight(bubble, m.text, S.find);
+    let body;
+    if (m.deleted) body = h('div', { class: 'b gone' }, '삭제된 메시지입니다');
+    else if (S.editing === m.id) body = editBox(m);
+    else if (m.image) {
+      const img = h('img', { src: m.image, alt: '보낸 사진', loading: 'lazy' });
+      img.addEventListener('load', () => { if (stick) box.scrollTop = box.scrollHeight; });
+      body = h('a', { class: 'b img', href: m.image, target: '_blank', rel: 'noopener', 'aria-label': '사진 크게 보기' }, img);
+    } else { body = h('div', { class: 'b' }); highlight(body, m.text, S.find); }
+    const canAct = me && !m.deleted && S.editing !== m.id;
+    const menu = canAct && msgMenu(m);
     nodes.push(h('div', { class: 'm' + (me ? ' me' : '') },
       !me && avatar('dm', u.id, u.nickname, 34),
       h('div', { class: 'col' },
         !me && c.kind === 'room' && h('span', { class: 'who' }, u.nickname),
-        bubble, h('span', { class: 't' }, fmtTime(m.at)))));
+        h('div', { class: 'bw' }, menu, body),
+        h('span', { class: 't' }, fmtTime(m.at), m.editedAt && !m.deleted && ' · 수정됨'))));
   }
   box.replaceChildren(...nodes);
   if (scrollEnd || nearBottom) box.scrollTop = box.scrollHeight;
   else box.scrollTop = prevTop; // 위치 유지
+}
+
+function msgMenu(m) {
+  const wrap = h('div', { class: 'mm' });
+  const btn = h('button', { class: 'mm-b', type: 'button', 'aria-label': '메시지 메뉴', 'aria-haspopup': 'true' }, svg('<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>', 18, '#4A5062', 2.4));
+  const pop = h('div', { class: 'mm-p', role: 'menu', hidden: true },
+    !m.image && h('button', { role: 'menuitem', type: 'button', onclick: () => { S.editing = m.id; renderMessages(false); const t = $('.edit-in'); t && (t.focus(), t.setSelectionRange(t.value.length, t.value.length)); } }, '수정'),
+    h('button', { role: 'menuitem', type: 'button', class: 'danger', onclick: () => {
+      if (confirm('이 메시지를 전송 취소할까요? 모두에게서 삭제돼요.')) wsSend({ type: 'delete', convId: m.convId, id: m.id });
+    } }, '전송 취소'));
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = pop.hidden;
+    document.querySelectorAll('.mm-p').forEach((x) => { x.hidden = true; });
+    pop.hidden = !open;
+  });
+  wrap.append(btn, pop);
+  return wrap;
+}
+document.addEventListener('click', () => document.querySelectorAll('.mm-p').forEach((x) => { x.hidden = true; }));
+
+function editBox(m) {
+  const ta = h('textarea', { class: 'edit-in', rows: 2, maxlength: 1000, 'aria-label': '메시지 수정' });
+  ta.value = m.text;
+  const save = () => {
+    const t = ta.value.trim();
+    if (!t) return toast('내용을 입력해 주세요.');
+    S.editing = null;
+    if (t !== m.text) wsSend({ type: 'edit', convId: m.convId, id: m.id, text: t });
+    else renderMessages(false);
+  };
+  const cancel = () => { S.editing = null; renderMessages(false); };
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); save(); }
+    if (e.key === 'Escape') cancel();
+  });
+  return h('div', { class: 'b edit' }, ta,
+    h('div', { class: 'edit-a' }, h('button', { type: 'button', onclick: cancel }, '취소'), h('button', { type: 'button', class: 'ok', onclick: save }, '저장')));
+}
+
+// 사진은 5MB 제한이라, 큰 사진(GIF 제외)은 브라우저에서 먼저 줄여서 보내요.
+async function shrinkImage(file) {
+  if (file.type === 'image/gif' || (file.size < 800 * 1024)) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+    cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+    const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.85));
+    return blob && blob.size < file.size ? blob : file;
+  } catch { return file; }
+}
+async function sendImage(file) {
+  if (!file || !S.active) return;
+  if (!file.type.startsWith('image/')) return toast('이미지 파일만 보낼 수 있어요.');
+  const id = S.active;
+  el.attachBtn.disabled = true;
+  try {
+    const body = await shrinkImage(file);
+    if (body.size > 5 * 1024 * 1024) throw new Error('이미지는 5MB 이하만 보낼 수 있어요.');
+    const res = await fetch(`/api/convs/${id}/images`, { method: 'POST', body, headers: { 'Content-Type': 'application/octet-stream' }, credentials: 'same-origin' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '사진을 보내지 못했어요.');
+  } catch (ex) { toast(ex.message); }
+  el.attachBtn.disabled = false;
 }
 
 function renderPeople() {
@@ -540,6 +618,7 @@ async function openConv(id) {
   renderAll();
   el.input.value = S.drafts.get(id) || '';
   el.input.dispatchEvent(new Event('input'));
+  S.editing = null;
   if (!S.msgs.has(id)) await loadMessages(id);
   if (S.active === id) { markRead(id); if (matchMedia('(min-width:821px)').matches) el.input.focus(); }
 }
@@ -697,6 +776,7 @@ function connectWs() {
       S.convs.set(d.conv.id, old ? { ...d.conv, unread: old.unread } : d.conv);
       renderSide(); renderPeople(); renderChatHeader();
     } else if (d.type === 'message') onMessage(d.message);
+    else if (d.type === 'message_update') onUpdate(d.message);
   };
   ws.onclose = () => {
     if (!S.me) return;
@@ -717,6 +797,17 @@ function onMessage(m) {
   if (viewing && m.userId !== S.me.id) wsSend({ type: 'read', convId: m.convId });
   renderSide(); renderRail(); updateTitle();
   if (S.active === m.convId) renderMessages(m.userId === S.me.id);
+}
+
+function onUpdate(m) {
+  const list = S.msgs.get(m.convId);
+  const i = list ? list.findIndex((x) => x.id === m.id) : -1;
+  if (i >= 0) list[i] = m;
+  const c = S.convs.get(m.convId);
+  if (c && c.last && c.last.id === m.id) c.last = m;
+  if (S.editing === m.id && m.deleted) S.editing = null;
+  renderSide();
+  if (S.active === m.convId) renderMessages(false);
 }
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.active) markRead(S.active); });

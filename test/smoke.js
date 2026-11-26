@@ -75,7 +75,39 @@ function connect(cookie) {
   const hist = await call(b.cookie, '/api/convs/' + room.json.id + '/messages');
   assert.equal(hist.json.messages.length, 1);
 
+
+  // --- 수정 / 전송 취소 / 이미지 ---
+  const rid = room.json.id;
+  const first = hist.json.messages[0];
   wsB.close();
+  const wsB2 = await connect(b.cookie);
+  wsB2.send(JSON.stringify({ type: 'edit', convId: rid, id: first.id, text: '남의 글 수정' }));
+  wsB2.send(JSON.stringify({ type: 'delete', convId: rid, id: first.id }));
+  await sleep(150);
+  assert.equal((await call(a.cookie, '/api/convs/' + rid + '/messages')).json.messages[0].text, '단체방 첫 메시지', '남의 메시지는 수정/삭제 불가');
+  wsA.send(JSON.stringify({ type: 'edit', convId: rid, id: first.id, text: '수정된 메시지' }));
+  await sleep(150);
+  assert.ok(wsB2.events.some((e) => e.type === 'message_update' && e.message.text === '수정된 메시지' && e.message.editedAt), '수정 실시간 전달');
+
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const up = await fetch(base + `/api/convs/${rid}/images`, { method: 'POST', headers: { cookie: a.cookie }, body: png });
+  assert.equal(up.status, 200, '이미지 업로드');
+  const bad = await fetch(base + `/api/convs/${rid}/images`, { method: 'POST', headers: { cookie: a.cookie }, body: Buffer.from('<svg onload=alert(1)>') });
+  assert.equal(bad.status, 400, '이미지가 아니면 거부');
+  const msgs = (await call(b.cookie, '/api/convs/' + rid + '/messages')).json.messages;
+  const im = msgs.find((m) => m.image);
+  assert.ok(im, '이미지 메시지 존재');
+  assert.equal((await fetch(base + im.image, { headers: { cookie: b.cookie } })).status, 200, '멤버는 이미지 열람');
+  assert.equal((await fetch(base + im.image, { headers: { cookie: '' } })).status, 401, '비로그인은 이미지 열람 불가');
+  const outsider = await call('', '/api/signup', { nickname: '외부', username: 'outsider', password: 'password123' });
+  assert.equal((await fetch(base + im.image, { headers: { cookie: outsider.cookie } })).status, 403, '비멤버는 이미지 열람 불가');
+  wsA.send(JSON.stringify({ type: 'delete', convId: rid, id: im.id }));
+  await sleep(150);
+  assert.equal((await fetch(base + im.image, { headers: { cookie: b.cookie } })).status, 404, '전송 취소하면 이미지 접근 불가');
+  const after = (await call(b.cookie, '/api/convs/' + rid + '/messages')).json.messages.find((m) => m.id === im.id);
+  assert.equal(after.deleted, true); assert.equal(after.image, null);
+
+  wsB2.close();
   await sleep(200);
   assert.ok(wsA.events.some((e) => e.type === 'presence' && e.userId === minjun.id && e.online === false), '오프라인 알림');
   st = await call(a.cookie, '/api/state');

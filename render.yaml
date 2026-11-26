@@ -1,0 +1,20 @@
+# Render Blueprint — 채팅 기록/사진을 보존하려면 디스크가 필요해서 유료(starter) 플랜을 써요.
+services:
+  - type: web
+    name: dtalk
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22.13.0
+      - key: DB_PATH
+        value: /var/data/schoolchat.db
+    disk:
+      name: dtalk-data
+      mountPath: /var/data
+      sizeGB: 1

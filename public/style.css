@@ -140,7 +140,9 @@ svg{flex:none}
 .comp-box textarea{flex:1;border:0;outline:none;background:transparent;font-size:15px;color:#14161F;min-width:0;resize:none;max-height:120px;line-height:1.5;padding:15px 0 14px}
 .send{width:44px;height:44px;border-radius:14px;border:0;background:#4F46E5;display:flex;align-items:center;justify-content:center}
 .send:disabled{background:#C7CBE8;cursor:default}
-.attach{width:44px;height:44px;border-radius:12px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;opacity:.55;cursor:not-allowed}
+.attach{width:44px;height:44px;border-radius:12px;border:0;background:transparent;display:flex;align-items:center;justify-content:center}
+.attach:hover{background:#F1F2F7}
+.attach:disabled{opacity:.5}
 .noconv{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5B6172;font-size:15px}
 .noconv .logo-mark{width:64px;height:64px;border-radius:20px}
 
@@ -209,3 +211,26 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{
   .msgs{padding:16px 12px 8px}.composer{padding:10px 12px 14px}
   .conn{left:0}
 }
+
+/* 메시지 메뉴 / 수정 / 이미지 */
+.bw{position:relative;display:flex;align-items:center;gap:4px;max-width:100%}
+.m.me .bw{flex-direction:row}
+.m .b.gone{background:#F1F2F7;color:#5B6172;border:1px dashed #CBD0DE;font-style:italic}
+.m .b.img{display:block;padding:4px;line-height:0;background:#fff;border:1px solid #E1E4EE}
+.m.me .b.img{background:#4F46E5}
+.m .b.img img{display:block;max-width:min(300px,100%);max-height:320px;border-radius:14px;min-width:80px;min-height:60px;background:#E8EAF2}
+.m .bw>.b{min-width:0}
+.mm{position:relative;flex:none}
+.mm-b{width:32px;height:32px;border-radius:10px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;opacity:0}
+.m:hover .mm-b,.mm-b:focus-visible,.mm-b[aria-expanded]:focus{opacity:1}
+.mm-b:hover{background:#E8EAF2}
+@media (hover:none){.mm-b{opacity:1}}
+.mm-p{position:absolute;right:0;top:34px;z-index:5;min-width:120px;background:#fff;border:1px solid #E1E4EE;border-radius:12px;padding:6px;box-shadow:0 10px 30px rgba(20,22,31,.18);display:flex;flex-direction:column}
+.mm-p button{height:40px;border:0;background:transparent;border-radius:8px;text-align:left;padding:0 12px;font-size:14px;color:#14161F}
+.mm-p button:hover{background:#F5F6FA}
+.mm-p button.danger{color:#B42318}
+.m .b.edit{background:#fff;color:#14161F;border:1.5px solid #4F46E5;border-radius:18px;padding:10px;width:min(420px,60vw)}
+.edit-in{width:100%;border:0;outline:none;resize:none;font-size:15px;line-height:1.5;background:transparent;color:#14161F}
+.edit-a{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}
+.edit-a button{height:36px;padding:0 14px;border-radius:10px;border:0;background:#F1F2F7;color:#3A3F52;font-size:13px;font-weight:500}
+.edit-a button.ok{background:#4F46E5;color:#fff;font-weight:700}

@@ -57,6 +57,12 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_conv ON messages(conv_id, id);
 `);
+for (const col of ['edited_at INTEGER', 'deleted INTEGER NOT NULL DEFAULT 0', 'image TEXT']) {
+  try { db.exec('ALTER TABLE messages ADD COLUMN ' + col); } catch { /* 이미 있음 */ }
+}
+const UPLOAD_DIR = path.join(path.dirname(DB_PATH), 'uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+const MAX_IMG = 5 * 1024 * 1024;
 
 const q = (sql) => db.prepare(sql);
 const stmt = {
@@ -78,11 +84,16 @@ const stmt = {
   isMember: q('SELECT 1 AS ok FROM members WHERE conv_id = ? AND user_id = ?'),
   insertConv: q('INSERT INTO convs (kind, name, visibility, code, owner_id, dm_key, created_at) VALUES (?,?,?,?,?,?,?)'),
   addMember: q('INSERT OR IGNORE INTO members (conv_id, user_id, last_read) VALUES (?,?,?)'),
-  lastMsg: q('SELECT id, user_id, text, created_at FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 1'),
+  lastMsg: q('SELECT id, user_id, text, created_at, edited_at, deleted, image FROM messages WHERE conv_id = ? ORDER BY id DESC LIMIT 1'),
   unread: q(`SELECT COUNT(*) AS n FROM messages WHERE conv_id = ? AND id > ? AND user_id != ?`),
   lastRead: q('SELECT last_read FROM members WHERE conv_id = ? AND user_id = ?'),
   insertMsg: q('INSERT INTO messages (conv_id, user_id, text, created_at) VALUES (?,?,?,?)'),
-  msgs: q(`SELECT id, conv_id, user_id, text, created_at FROM (
+  insertImg: q('INSERT INTO messages (conv_id, user_id, text, created_at, image) VALUES (?,?,?,?,?)'),
+  msgById: q('SELECT * FROM messages WHERE id = ?'),
+  editMsg: q('UPDATE messages SET text = ?, edited_at = ? WHERE id = ?'),
+  delMsg: q("UPDATE messages SET deleted = 1, text = '', image = NULL WHERE id = ?"),
+  imgMsg: q('SELECT m.conv_id FROM messages m WHERE m.image = ? AND m.deleted = 0'),
+  msgs: q(`SELECT id, conv_id, user_id, text, created_at, edited_at, deleted, image FROM (
              SELECT * FROM messages WHERE conv_id = ? AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT 50
            ) ORDER BY id`),
   markRead: q(`UPDATE members SET last_read = (SELECT COALESCE(MAX(id),0) FROM messages WHERE conv_id = ?)
@@ -166,7 +177,11 @@ function memberIds(convId) { return stmt.convMembers.all(convId).map((r) => r.us
 
 // ---------- 직렬화 ----------
 const pubUser = (u) => ({ id: u.id, nickname: u.nickname, online: isOnline(u.id), lastSeen: u.last_seen });
-const pubMsg = (m) => ({ id: m.id, convId: m.conv_id, userId: m.user_id, text: m.text, at: m.created_at });
+const pubMsg = (m) => ({
+  id: m.id, convId: m.conv_id, userId: m.user_id, at: m.created_at,
+  text: m.deleted ? '' : m.text, deleted: !!m.deleted, editedAt: m.edited_at || null,
+  image: !m.deleted && m.image ? '/api/images/' + m.image : null
+});
 function pubConv(c, me) {
   const last = stmt.lastMsg.get(c.id);
   const lr = stmt.lastRead.get(c.id, me)?.last_read || 0;
@@ -322,6 +337,48 @@ app.post('/api/dm', auth, (req, res) => {
   res.json({ id: c.id });
 });
 
+function sniffImage(b) {
+  if (b.length > 12 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
+  if (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
+  if (b.length > 6 && b.subarray(0, 4).toString('latin1') === 'GIF8') return 'gif';
+  if (b.length > 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return null;
+}
+const MIME = { jpg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+
+app.post('/api/convs/:id/images', auth, express.raw({ type: () => true, limit: MAX_IMG }), (req, res) => {
+  const convId = Number(req.params.id);
+  if (!stmt.isMember.get(convId, req.user.id)) return bad(res, '참여 중인 채팅이 아니에요.', 403);
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || !buf.length) return bad(res, '이미지를 선택해 주세요.');
+  const ext = sniffImage(buf);
+  if (!ext) return bad(res, 'JPG, PNG, GIF, WEBP 이미지만 보낼 수 있어요.');
+  const name = crypto.randomBytes(16).toString('hex') + '.' + ext;
+  fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
+  const now = Date.now();
+  const r = stmt.insertImg.run(convId, req.user.id, '', now, name);
+  stmt.markRead.run(convId, convId, req.user.id);
+  const msg = pubMsg(stmt.msgById.get(Number(r.lastInsertRowid)));
+  for (const mid of memberIds(convId)) sendTo(mid, { type: 'message', message: msg });
+  res.json({ ok: true });
+});
+
+app.get('/api/images/:name', auth, (req, res) => {
+  const name = req.params.name;
+  if (!/^[a-f0-9]{32}\.(jpg|png|gif|webp)$/.test(name)) return bad(res, '없는 이미지예요.', 404);
+  const row = stmt.imgMsg.get(name);
+  if (!row) return bad(res, '없는 이미지예요.', 404);
+  if (!stmt.isMember.get(row.conv_id, req.user.id)) return bad(res, '볼 수 없는 이미지예요.', 403);
+  res.setHeader('Content-Type', MIME[name.split('.')[1]]);
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.sendFile(path.join(UPLOAD_DIR, name));
+});
+
+app.use((err, req, res, next) => {
+  if (err && err.type === 'entity.too.large') return bad(res, '이미지는 5MB 이하만 보낼 수 있어요.', 413);
+  if (err) return bad(res, '요청을 처리하지 못했어요.');
+  next();
+});
 app.use('/api', (req, res) => bad(res, '없는 요청이에요.', 404));
 
 // ---------- WebSocket ----------
@@ -358,6 +415,19 @@ wss.on('connection', (ws) => {
       stmt.markRead.run(convId, convId, uid);
       const msg = pubMsg({ id: Number(r.lastInsertRowid), conv_id: convId, user_id: uid, text, created_at: Date.now() });
       for (const mid of memberIds(convId)) sendTo(mid, { type: 'message', message: msg, cid: m.cid || null });
+    } else if (m.type === 'edit' || m.type === 'delete') {
+      const row = stmt.msgById.get(Number(m.id));
+      if (!row || row.conv_id !== convId || row.user_id !== uid || row.deleted) return;
+      if (m.type === 'edit') {
+        const text = String(m.text || '').replace(/\r\n/g, '\n').trim();
+        if (row.image || !text || [...text].length > MAX_MSG) return;
+        stmt.editMsg.run(text, Date.now(), row.id);
+      } else {
+        stmt.delMsg.run(row.id);
+        if (row.image) fs.rm(path.join(UPLOAD_DIR, row.image), () => {});
+      }
+      const msg = pubMsg(stmt.msgById.get(row.id));
+      for (const mid of memberIds(convId)) sendTo(mid, { type: 'message_update', message: msg });
     } else if (m.type === 'read') {
       stmt.markRead.run(convId, convId, uid);
     }
